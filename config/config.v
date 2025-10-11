@@ -47,6 +47,17 @@ __global:
     verbose    bool
 }
 
+// Dependency represents an external dependency to download/extract
+pub struct Dependency {
+__global:
+    name       string
+    url        string // download URL
+    archive    string // relative archive path to save (under dependencies/tmp)
+    checksum   string // optional checksum to verify
+    extract_to string // destination directory under dependencies/
+    build_cmds []string // optional semicolon-separated build commands
+}
+
 // BuildConfig holds the configuration for the project
 pub struct BuildConfig {
 __global:
@@ -70,6 +81,7 @@ __global:
     shaders_dir string = 'bin/shaders' // for shader compilation
     dependencies_dir string = 'dependencies' // external dependencies
     parallel_compilation bool = true // enable parallel builds
+    dependencies []Dependency
     
     // Build directives from source files
     build_directives []BuildDirective
@@ -90,6 +102,7 @@ pub const default_config = BuildConfig{
     verbose: false
     shared_libs: []
     tools: []
+    dependencies: []
 }
 
 // Parse build directives from source files
@@ -194,6 +207,11 @@ pub fn (mut build_config BuildConfig) parse_build_directives() ! {
 
 pub fn parse_args() !BuildConfig {
     mut build_config := default_config
+    // Auto-load config.ini if present in current directory
+    if os.is_file('config.ini') {
+        build_config = parse_config_file('config.ini') or { build_config }
+    }
+
     mut i := 2 // Skip program name and command
     
     for i < os.args.len {
@@ -319,17 +337,21 @@ pub fn parse_config_file(filename string) !BuildConfig {
     mut current_section := ''
     mut current_lib_index := 0
     mut current_tool_index := 0
+    mut current_dep_index := 0
     
     for line in lines {
         if line.starts_with('#') || line.trim_space() == '' { continue }
         
         if line.starts_with('[') && line.ends_with(']') {
-            current_section = line[1..line.len - 1]
-            // Reset indices when entering new sections
+            // keep the brackets in current_section to match existing match arms
+            current_section = '[' + line[1..line.len - 1] + ']'
+            // Point indices to the next entry index for repeated sections
             if current_section == '[shared_libs]' {
-                current_lib_index = 0
+                current_lib_index = build_config.shared_libs.len
             } else if current_section == '[tools]' {
-                current_tool_index = 0
+                current_tool_index = build_config.tools.len
+            } else if current_section == '[dependencies]' {
+                current_dep_index = build_config.dependencies.len
             }
             continue
         }
@@ -425,7 +447,7 @@ pub fn parse_config_file(filename string) !BuildConfig {
                             }
                         }
                     }
-                    current_lib_index++
+                    // keys for this shared_lib section are populated into the same struct
                 }
                 '[tools]' {
                     // Ensure we have a tool config to modify
@@ -476,7 +498,34 @@ pub fn parse_config_file(filename string) !BuildConfig {
                             }
                         }
                     }
-                    current_tool_index++
+                    // keys for this tool section are populated into the same struct
+                }
+                '[dependencies]' {
+                    // Ensure we have a dependency entry to modify
+                    if current_dep_index >= build_config.dependencies.len {
+                        build_config.dependencies << Dependency{}
+                    }
+                    mut dep := &build_config.dependencies[current_dep_index]
+
+                    match key {
+                        'name' { dep.name = value }
+                        'url' { dep.url = value }
+                        'archive' { dep.archive = value }
+                        'checksum' { dep.checksum = value }
+                        'build_cmds' {
+                            cmds := value.split(';')
+                            for c in cmds {
+                                dep.build_cmds << c.trim_space()
+                            }
+                        }
+                        'extract_to' { dep.extract_to = value }
+                        else {
+                            if build_config.verbose {
+                                println('Warning: Unknown dependency config key: ${key}')
+                            }
+                        }
+                    }
+                    // keys for this dependency section are populated into the same struct
                 }
                 else {
                     if build_config.verbose {

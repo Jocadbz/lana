@@ -149,6 +149,23 @@ lana --help
 ```
 Shows commands, options, and config examples.
 
+### Setup (dependencies)
+```bash
+lana setup
+```
+Fetches and extracts external dependencies declared in `config.ini` under `[dependencies]` sections. Each dependency supports the following keys:
+
+- `name` - logical name for the dependency
+- `url` - download URL or git repository
+- `archive` - optional filename to save the downloaded archive under `dependencies/tmp`
+- `checksum` - optional sha256 checksum to verify the archive
+- `extract_to` - directory under `dependencies/` where files should be extracted or cloned
+
+Notes:
+- If `url` points to a git repository (ends with `.git`), `lana setup` will perform a shallow clone into `dependencies/<extract_to>`.
+- For archive URLs `lana setup` will try `curl` then `wget` to download, will verify checksum if provided, and will extract common archive types (`.tar.gz`, `.tar.xz`, `.zip`).
+- The current implementation performs a best-effort download/extract and prints warnings/errors; it is intentionally simple and can be extended or replaced by a more robust script if needed.
+
 ## Configuration
 
 `config.ini` handles **global** settings (overridden by directives for per-file needs). Edit it in your project root.

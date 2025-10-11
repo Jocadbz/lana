@@ -5,6 +5,7 @@ import config
 import builder
 import runner
 import initializer
+import deps
 import help
 
 const (
@@ -45,6 +46,12 @@ fn main() {
             }
         }
         'init' { initializer.init_project(os.args[2] or { 'myproject' }) }
+        'setup' {
+            deps.fetch_dependencies(config_data) or {
+                eprintln('Failed to fetch dependencies: ${err}')
+                exit(1)
+            }
+        }
         else { help.show_help() }
     }
 }
