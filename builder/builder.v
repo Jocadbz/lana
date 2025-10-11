@@ -25,6 +25,61 @@ pub struct BuildTargetInfo {
     libraries  []string
 }
 
+struct CompileTask {
+    source string
+    obj string
+    target_config config.TargetConfig
+}
+
+struct CompileResult {
+    obj string
+    err string
+}
+
+fn run_compile_tasks(tasks []CompileTask, build_config config.BuildConfig) ![]string {
+    mut object_files := []string{}
+    if tasks.len == 0 {
+        return object_files
+    }
+
+    // If parallel compilation disabled, compile sequentially
+    if !build_config.parallel_compilation {
+        for task in tasks {
+            object := compile_file(task.source, task.obj, build_config, task.target_config) or { 
+                return error('Failed to compile ${task.source}: ${err}')
+            }
+            object_files << object
+        }
+        return object_files
+    }
+
+    // Parallel path: spawn one goroutine per task and collect results
+    res_ch := chan CompileResult{cap: tasks.len}
+
+    for task in tasks {
+        // capture task in local variable to avoid loop variable issues
+        t := task
+        go fn (t CompileTask, ch chan CompileResult, bc config.BuildConfig) {
+            object := compile_file(t.source, t.obj, bc, t.target_config) or {
+                ch <- CompileResult{obj: '', err: err.msg()}
+                return
+            }
+            ch <- CompileResult{obj: object, err: ''}
+        }(t, res_ch, build_config)
+    }
+
+    // Wait for all results
+    for _ in 0 .. tasks.len {
+        r := <-res_ch
+        if r.err != '' {
+            return error('Compilation failed: ${r.err}')
+        }
+        object_files << r.obj
+    }
+
+    return object_files
+}
+
 pub fn build(mut build_config config.BuildConfig) ! {
     println('Building ${build_config.project_name}...')
     
@@ -357,7 +412,8 @@ fn build_shared_library(mut lib_config config.SharedLibConfig, build_config conf
     mut object_dir := os.join_path(build_config.build_dir, lib_config.name)
     os.mkdir_all(object_dir) or { return error('Failed to create object directory: ${object_dir}') }
     
-    // Compile each source file
+    // Compile each source file (possibly in parallel)
+    mut compile_tasks := []CompileTask{}
     for src_file in lib_config.sources {
         if !os.is_file(src_file) {
             if build_config.verbose {
@@ -365,26 +421,29 @@ fn build_shared_library(mut lib_config config.SharedLibConfig, build_config conf
             }
             continue
         }
-        
+
         obj_file := get_object_file(src_file, object_dir)
-        
+
         // Create object directory if needed
         obj_path := os.dir(obj_file)
         os.mkdir_all(obj_path) or { return error('Failed to create object directory: ${obj_path}') }
-        
-        // Check if we need to recompile
+
         if needs_recompile(src_file, obj_file) {
             println('Compiling ${lib_config.name}: ${src_file}...')
             lib_target_config := config.TargetConfig(lib_config)
-            object_files << compile_file(src_file, obj_file, build_config, lib_target_config) or { 
-                return error('Failed to compile ${src_file} for ${lib_config.name}')
-            }
+            compile_tasks << CompileTask{source: src_file, obj: obj_file, target_config: lib_target_config}
         } else {
             if lib_config.verbose {
                 println('Using cached ${obj_file} for ${lib_config.name}')
             }
             object_files << obj_file
         }
+    }
+
+    // Run compile tasks (parallel if enabled)
+    if compile_tasks.len > 0 {
+        compiled := run_compile_tasks(compile_tasks, build_config) or { return err }
+        object_files << compiled
     }
     
     if object_files.len == 0 {
@@ -418,7 +477,8 @@ fn build_tool(mut tool_config config.ToolConfig, build_config config.BuildConfig
     mut object_dir := os.join_path(build_config.build_dir, tool_config.name)
     os.mkdir_all(object_dir) or { return error('Failed to create object directory: ${object_dir}') }
     
-    // Compile each source file
+    // Compile each source file (possibly in parallel)
+    mut compile_tasks := []CompileTask{}
     for src_file in tool_config.sources {
         if !os.is_file(src_file) {
             if build_config.verbose {
@@ -426,26 +486,29 @@ fn build_tool(mut tool_config config.ToolConfig, build_config config.BuildConfig
             }
             continue
         }
-        
+
         obj_file := get_object_file(src_file, object_dir)
-        
+
         // Create object directory if needed
         obj_path := os.dir(obj_file)
         os.mkdir_all(obj_path) or { return error('Failed to create object directory: ${obj_path}') }
-        
-        // Check if we need to recompile
+
         if needs_recompile(src_file, obj_file) {
             println('Compiling ${tool_config.name}: ${src_file}...')
             tool_target_config := config.TargetConfig(tool_config)
-            object_files << compile_file(src_file, obj_file, build_config, tool_target_config) or { 
-                return error('Failed to compile ${src_file} for ${tool_config.name}')
-            }
+            compile_tasks << CompileTask{source: src_file, obj: obj_file, target_config: tool_target_config}
         } else {
             if tool_config.verbose {
                 println('Using cached ${obj_file} for ${tool_config.name}')
             }
             object_files << obj_file
         }
+    }
+
+    // Run compile tasks (parallel if enabled)
+    if compile_tasks.len > 0 {
+        compiled := run_compile_tasks(compile_tasks, build_config) or { return err }
+        object_files << compiled
     }
     
     if object_files.len == 0 {
