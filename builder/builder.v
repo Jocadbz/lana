@@ -3,6 +3,7 @@ module builder
 import os
 import config
 import deps
+import runtime
 
 // BuildTarget represents a build target (shared lib or tool)
 pub enum BuildTarget {
@@ -53,22 +54,47 @@ fn run_compile_tasks(tasks []CompileTask, build_config config.BuildConfig) ![]st
         return object_files
     }
 
-    // Parallel path: spawn one goroutine per task and collect results
-    res_ch := chan CompileResult{cap: tasks.len}
-
-    for task in tasks {
-        // capture task in local variable to avoid loop variable issues
-        t := task
-        go fn (t CompileTask, ch chan CompileResult, bc config.BuildConfig) {
-            object := compile_file(t.source, t.obj, bc, t.target_config) or {
-                ch <- CompileResult{obj: '', err: err.msg()}
-                return
-            }
-            ch <- CompileResult{obj: object, err: ''}
-        }(t, res_ch, build_config)
+    // Bounded worker pool: spawn up to N workers where N = min(task_count, nr_cpus())
+    mut workers := runtime.nr_cpus()
+    if workers < 1 {
+        workers = 1
+    }
+    if workers > tasks.len {
+        workers = tasks.len
     }
 
-    // Wait for all results
+    tasks_ch := chan CompileTask{cap: tasks.len}
+    res_ch := chan CompileResult{cap: tasks.len}
+
+    // Worker goroutines
+    for _ in 0 .. workers {
+        go fn (ch chan CompileTask, res chan CompileResult, bc config.BuildConfig) {
+            for {
+                t := <-ch
+                // sentinel task: empty source signals worker to exit
+                if t.source == '' {
+                    break
+                }
+                object := compile_file(t.source, t.obj, bc, t.target_config) or {
+                    res <- CompileResult{obj: '', err: err.msg()}
+                    continue
+                }
+                res <- CompileResult{obj: object, err: ''}
+            }
+        }(tasks_ch, res_ch, build_config)
+    }
+
+    // Send tasks
+    for t in tasks {
+        tasks_ch <- t
+    }
+
+    // Send sentinel tasks to tell workers to exit
+    for _ in 0 .. workers {
+        tasks_ch <- CompileTask{}
+    }
+
+    // Collect results
     for _ in 0 .. tasks.len {
         r := <-res_ch
         if r.err != '' {
