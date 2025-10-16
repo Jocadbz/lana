@@ -93,102 +93,112 @@ pub fn fetch_dependencies(build_config config.BuildConfig) ! {
         println('Processing dependency: ${dep.name}')
         println('  parsed: url="${dep.url}", archive="${dep.archive}", extract_to="${dep.extract_to}"')
 
-        if dep.url.trim_space() == '' {
-            return error('Dependency ${dep.name} has empty url in config')
-        }
+        // Allow dependencies with only a name. If no URL is provided, skip
+        // download/extract/clone steps and only run any provided build_cmds.
+        url_trim := dep.url.trim_space()
 
-        // Decide if URL is a git repo or an archive
-        is_git := dep.url.ends_with('.git') || dep.url.starts_with('git://')
+        // Decide if URL is a git repo or an archive (only if URL present)
+        is_git := url_trim != '' && (url_trim.ends_with('.git') || url_trim.starts_with('git://'))
 
         extract_to := if dep.extract_to != '' { os.join_path(deps_dir, dep.extract_to) } else { os.join_path(deps_dir, dep.name) }
 
-        if is_git {
-            // Clone repository
-            if os.is_dir(extract_to) {
-                println('Dependency already cloned at ${extract_to}, skipping')
-                continue
-            }
-            cmd := 'git clone --depth 1 ${dep.url} ${extract_to}'
-            println('Running: ${cmd}')
-            res := os.execute(cmd)
-            if res.exit_code != 0 {
-                return error('Failed to clone ${dep.url}: ${res.output}')
-            }
-            continue
-        }
-
-        // Archive download path
-        archive_name := if dep.archive != '' { dep.archive } else { os.file_name(dep.url) }
-        archive_path := os.join_path(tmp_dir, archive_name)
-
-        if !os.is_file(archive_path) {
-            println('Downloading ${dep.url} -> ${archive_path}')
-            // Prefer curl, fall back to wget
-            mut res := os.execute('curl -L -o ${archive_path} ${dep.url}')
-            if res.exit_code != 0 {
-                res = os.execute('wget -O ${archive_path} ${dep.url}')
-                if res.exit_code != 0 {
-                    return error('Failed to download ${dep.url}: ${res.output}')
-                }
-            }
+        if url_trim == '' {
+            println('No url provided for ${dep.name}, skipping download/extract; will only run build_cmds if present')
         } else {
-            println('Archive already exists: ${archive_path}')
-        }
-
-        // Optionally verify checksum
-        if dep.checksum != '' {
-            // Use sha256sum if available
-            res := os.execute('sha256sum ${archive_path}')
-            if res.exit_code != 0 {
-                println('Warning: sha256sum not available to verify checksum')
+            if is_git {
+                // Clone repository if needed
+                if os.is_dir(extract_to) {
+                    println('Dependency already cloned at ${extract_to}, skipping clone')
+                } else {
+                    cmd := 'git clone --depth 1 ${url_trim} ${extract_to}'
+                    println('Running: ${cmd}')
+                    code := os.system(cmd)
+                    if code != 0 {
+                        return error('Failed to clone ${url_trim}: exit ${code}')
+                    }
+                }
             } else {
-                parts := res.output.split(' ')
-                if parts.len > 0 && parts[0].trim_space() != dep.checksum {
-                    return error('Checksum mismatch for ${archive_path}')
+                // Archive download path
+                archive_name := if dep.archive != '' { dep.archive } else { os.file_name(url_trim) }
+                archive_path := os.join_path(tmp_dir, archive_name)
+
+                if !os.is_file(archive_path) {
+                    println('Downloading ${url_trim} -> ${archive_path}')
+                    // Prefer curl, fall back to wget
+                    mut code := os.system('curl -L -o ${archive_path} ${url_trim}')
+                    if code != 0 {
+                        code = os.system('wget -O ${archive_path} ${url_trim}')
+                        if code != 0 {
+                            return error('Failed to download ${url_trim}: curl/wget exit ${code}')
+                        }
+                    }
+                } else {
+                    println('Archive already exists: ${archive_path}')
+                }
+
+                // Optionally verify checksum
+                if dep.checksum != '' {
+                    // Use sha256sum if available
+                    res := os.execute('sha256sum ${archive_path}')
+                    if res.exit_code != 0 {
+                        println('Warning: sha256sum not available to verify checksum')
+                    } else {
+                        parts := res.output.split(' ')
+                        if parts.len > 0 && parts[0].trim_space() != dep.checksum {
+                            return error('Checksum mismatch for ${archive_path}')
+                        }
+                    }
+                }
+
+                // Extract archive
+                if os.is_dir(extract_to) {
+                    println('Already extracted to ${extract_to}, skipping')
+                } else {
+                    os.mkdir_all(extract_to) or { return error('Failed to create ${extract_to}: ${err}') }
+
+                    // Basic extraction handling by extension
+                    lower := archive_path.to_lower()
+                    if lower.ends_with('.tar.gz') || lower.ends_with('.tgz') || lower.ends_with('.tar.xz') || lower.ends_with('.tar') {
+                        cmd := 'tar -xf ${archive_path} -C ${deps_dir}'
+                        println('Extracting with: ${cmd}')
+                        code := os.system(cmd)
+                        if code != 0 {
+                            return error('Failed to extract ${archive_path}: exit ${code}')
+                        }
+                        // If the archive created a top-level dir, caller should set extract_to to match archive content.
+                    } else if lower.ends_with('.zip') {
+                        cmd := 'unzip -q ${archive_path} -d ${extract_to}'
+                        println('Extracting zip with: ${cmd}')
+                        code := os.system(cmd)
+                        if code != 0 {
+                            return error('Failed to unzip ${archive_path}: exit ${code}')
+                        }
+                    } else {
+                        println('Unknown archive format for ${archive_path}, skipping extraction')
+                    }
                 }
             }
-        }
-
-        // Extract archive
-        if os.is_dir(extract_to) {
-            println('Already extracted to ${extract_to}, skipping')
-            continue
-        }
-        os.mkdir_all(extract_to) or { return error('Failed to create ${extract_to}: ${err}') }
-
-        // Basic extraction handling by extension
-        lower := archive_path.to_lower()
-        if lower.ends_with('.tar.gz') || lower.ends_with('.tgz') || lower.ends_with('.tar.xz') || lower.ends_with('.tar') {
-            cmd := 'tar -xf ${archive_path} -C ${deps_dir}'
-            println('Extracting with: ${cmd}')
-            res := os.execute(cmd)
-            if res.exit_code != 0 {
-                return error('Failed to extract ${archive_path}: ${res.output}')
-            }
-            // If the archive created a top-level dir, move/rename it to extract_to if needed
-            // We won't attempt to be clever here; caller should set extract_to to match archive content.
-        } else if lower.ends_with('.zip') {
-            cmd := 'unzip -q ${archive_path} -d ${extract_to}'
-            println('Extracting zip with: ${cmd}')
-            res := os.execute(cmd)
-            if res.exit_code != 0 {
-                return error('Failed to unzip ${archive_path}: ${res.output}')
-            }
-        } else {
-            println('Unknown archive format for ${archive_path}, skipping extraction')
         }
 
         // Run build commands if provided, otherwise run package-specific defaults
         if dep.build_cmds.len > 0 {
+            // Choose where to run build commands:
+            // - If extract_to was provided, run inside deps/<extract_to> (create it if missing)
+            // - Otherwise run from project root (os.getwd())
+            mut run_dir := os.getwd()
+            if dep.extract_to != '' {
+                run_dir = os.join_path(deps_dir, dep.extract_to)
+                os.mkdir_all(run_dir) or { println('Warning: Failed to create build dir ${run_dir}: ${err}') }
+            }
+
             for cmd_line in dep.build_cmds {
                 println('Running build command for ${dep.name}: ${cmd_line}')
-                // run in extract_to
                 old_cwd := os.getwd()
-                os.chdir(extract_to) or { return error('Failed to chdir: ${err}') }
-                res := os.execute(cmd_line)
+                os.chdir(run_dir) or { return error('Failed to chdir: ${err}') }
+                code := os.system(cmd_line)
                 os.chdir(old_cwd) or { }
-                if res.exit_code != 0 {
-                    return error('Build command failed for ${dep.name}: ${res.output}')
+                if code != 0 {
+                    return error('Build command failed for ${dep.name}: exit ${code}')
                 }
             }
         } else {
@@ -198,11 +208,11 @@ pub fn fetch_dependencies(build_config config.BuildConfig) ! {
                     println('Building zlib...')
                     old_cwd := os.getwd()
                     os.chdir(extract_to) or { return error('Failed to chdir: ${err}') }
-                    mut res := os.execute('./configure')
-                    if res.exit_code != 0 { os.chdir(old_cwd) or {} ; return error('zlib configure failed: ${res.output}') }
-                    res = os.execute('make')
+                    mut code := os.system('./configure')
+                    if code != 0 { os.chdir(old_cwd) or {} ; return error('zlib configure failed: exit ${code}') }
+                    code = os.system('make')
                     os.chdir(old_cwd) or {}
-                    if res.exit_code != 0 { return error('zlib make failed: ${res.output}') }
+                    if code != 0 { return error('zlib make failed: exit ${code}') }
                 }
                 'sockpp' {
                     println('Building sockpp...')
@@ -211,27 +221,27 @@ pub fn fetch_dependencies(build_config config.BuildConfig) ! {
                     os.mkdir_all(build_dir) or { return error('Failed to create build dir: ${err}') }
                     old_cwd := os.getwd()
                     os.chdir(extract_to) or { return error('Failed to chdir: ${err}') }
-                    mut res := os.execute('cmake -Bbuild .')
-                    if res.exit_code != 0 { os.chdir(old_cwd) or {} ; return error('sockpp cmake failed: ${res.output}') }
-                    res = os.execute('cmake --build build')
+                    mut code := os.system('cmake -Bbuild .')
+                    if code != 0 { os.chdir(old_cwd) or {} ; return error('sockpp cmake failed: exit ${code}') }
+                    code = os.system('cmake --build build')
                     os.chdir(old_cwd) or {}
-                    if res.exit_code != 0 { return error('sockpp build failed: ${res.output}') }
+                    if code != 0 { return error('sockpp build failed: exit ${code}') }
                 }
                 'shaderc' {
                     println('Building shaderc (invoke update script + ninja)')
                     old_cwd := os.getwd()
                     os.chdir(extract_to) or { return error('Failed to chdir: ${err}') }
-                    mut res := os.execute('./update_shaderc_sources.py')
-                    if res.exit_code != 0 { os.chdir(old_cwd) or {} ; return error('shaderc update failed: ${res.output}') }
+                    mut code := os.system('./update_shaderc_sources.py')
+                    if code != 0 { os.chdir(old_cwd) or {} ; return error('shaderc update failed: exit ${code}') }
                     // create build dir
                     build_dir := 'build-$(date +%s)'
                     os.mkdir_all(build_dir) or { os.chdir(old_cwd) or {} ; return error('Failed to create shaderc build dir') }
                     os.chdir(build_dir) or { os.chdir(old_cwd) or {} ; return error('Failed to chdir to shaderc build dir') }
-                    res = os.execute('cmake -GNinja -DCMAKE_BUILD_TYPE=Release ../src/')
-                    if res.exit_code != 0 { os.chdir(old_cwd) or {} ; return error('shaderc cmake failed: ${res.output}') }
-                    res = os.execute('ninja')
+                    code = os.system('cmake -GNinja -DCMAKE_BUILD_TYPE=Release ../src/')
+                    if code != 0 { os.chdir(old_cwd) or {} ; return error('shaderc cmake failed: exit ${code}') }
+                    code = os.system('ninja')
                     os.chdir(old_cwd) or {}
-                    if res.exit_code != 0 { return error('shaderc ninja failed: ${res.output}') }
+                    if code != 0 { return error('shaderc ninja failed: exit ${code}') }
                     // attempt to copy glslc to dependencies/shaderc/bin (best-effort)
                     glslc_path := os.join_path(extract_to, build_dir, 'glslc', 'glslc')
                     out_dir := os.join_path(build_config.dependencies_dir, dep.extract_to)

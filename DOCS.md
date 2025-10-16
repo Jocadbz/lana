@@ -155,16 +155,29 @@ lana setup
 ```
 Fetches and extracts external dependencies declared in `config.ini` under `[dependencies]` sections. Each dependency supports the following keys:
 
-- `name` - logical name for the dependency
-- `url` - download URL or git repository
+- `name` - logical name for the dependency (required)
+- `url` - download URL or git repository (optional)
 - `archive` - optional filename to save the downloaded archive under `dependencies/tmp`
 - `checksum` - optional sha256 checksum to verify the archive
 - `extract_to` - directory under `dependencies/` where files should be extracted or cloned
+- `build_cmds` - optional semicolon-separated shell commands to build/install the dependency
 
 Notes:
+- Only `name` is required. If `url` is omitted Lana will skip any download/clone and extraction steps — this is useful for dependencies that are generated locally or that only require running project-local commands.
 - If `url` points to a git repository (ends with `.git`), `lana setup` will perform a shallow clone into `dependencies/<extract_to>`.
 - For archive URLs `lana setup` will try `curl` then `wget` to download, will verify checksum if provided, and will extract common archive types (`.tar.gz`, `.tar.xz`, `.zip`).
+- When `build_cmds` are present they are executed either inside `dependencies/<extract_to>` (if `extract_to` is set or a clone/extract was performed) or in the project root (if no extract directory is available).
 - The current implementation performs a best-effort download/extract and prints warnings/errors; it is intentionally simple and can be extended or replaced by a more robust script if needed.
+
+Example (only `name` + `build_cmds`):
+
+```ini
+[dependencies]
+name = generate_headers
+build_cmds = tools/gen_headers.sh; cp -r generated/include ../../include/
+```
+
+In this example `lana setup` will not try to download anything — it will run the `build_cmds` from the project root, allowing you to run arbitrary local build or generation steps.
 
 ## Configuration
 
