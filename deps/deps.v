@@ -202,55 +202,9 @@ pub fn fetch_dependencies(build_config config.BuildConfig) ! {
                 }
             }
         } else {
-            // default build steps for known dependencies
-            match dep.name {
-                'zlib' {
-                    println('Building zlib...')
-                    old_cwd := os.getwd()
-                    os.chdir(extract_to) or { return error('Failed to chdir: ${err}') }
-                    mut code := os.system('./configure')
-                    if code != 0 { os.chdir(old_cwd) or {} ; return error('zlib configure failed: exit ${code}') }
-                    code = os.system('make')
-                    os.chdir(old_cwd) or {}
-                    if code != 0 { return error('zlib make failed: exit ${code}') }
-                }
-                'sockpp' {
-                    println('Building sockpp...')
-                    // Try cmake build in project dir (common layout)
-                    build_dir := os.join_path(extract_to, 'build')
-                    os.mkdir_all(build_dir) or { return error('Failed to create build dir: ${err}') }
-                    old_cwd := os.getwd()
-                    os.chdir(extract_to) or { return error('Failed to chdir: ${err}') }
-                    mut code := os.system('cmake -Bbuild .')
-                    if code != 0 { os.chdir(old_cwd) or {} ; return error('sockpp cmake failed: exit ${code}') }
-                    code = os.system('cmake --build build')
-                    os.chdir(old_cwd) or {}
-                    if code != 0 { return error('sockpp build failed: exit ${code}') }
-                }
-                'shaderc' {
-                    println('Building shaderc (invoke update script + ninja)')
-                    old_cwd := os.getwd()
-                    os.chdir(extract_to) or { return error('Failed to chdir: ${err}') }
-                    mut code := os.system('./update_shaderc_sources.py')
-                    if code != 0 { os.chdir(old_cwd) or {} ; return error('shaderc update failed: exit ${code}') }
-                    // create build dir
-                    build_dir := 'build-$(date +%s)'
-                    os.mkdir_all(build_dir) or { os.chdir(old_cwd) or {} ; return error('Failed to create shaderc build dir') }
-                    os.chdir(build_dir) or { os.chdir(old_cwd) or {} ; return error('Failed to chdir to shaderc build dir') }
-                    code = os.system('cmake -GNinja -DCMAKE_BUILD_TYPE=Release ../src/')
-                    if code != 0 { os.chdir(old_cwd) or {} ; return error('shaderc cmake failed: exit ${code}') }
-                    code = os.system('ninja')
-                    os.chdir(old_cwd) or {}
-                    if code != 0 { return error('shaderc ninja failed: exit ${code}') }
-                    // attempt to copy glslc to dependencies/shaderc/bin (best-effort)
-                    glslc_path := os.join_path(extract_to, build_dir, 'glslc', 'glslc')
-                    out_dir := os.join_path(build_config.dependencies_dir, dep.extract_to)
-                    os.mkdir_all(os.join_path(out_dir, 'bin')) or { }
-                    if os.is_file(glslc_path) {
-                        os.cp(glslc_path, os.join_path(out_dir, 'bin', 'glslc')) or { println('Warning: failed to copy glslc: ${err}') }
-                    }
-                }
-                else {}
+            // No package-specific defaults: if build_cmds are absent we do nothing.
+            if build_config.verbose {
+                println('No default build steps for dependency: ${dep.name}; provide build_cmds in config.ini to build it')
             }
         }
     }
