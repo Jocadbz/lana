@@ -215,9 +215,12 @@ fn build_from_directives(mut build_config config.BuildConfig, mut shared_libs_bu
             if os.is_file(source_file) {
                 break
             }
+            // if none matched, reset to empty for next iteration
+            source_file = ''
         }
-        
-        if source_file == '' {
+
+        // Ensure the found source actually exists; avoid using last attempted extension if none matched
+        if source_file == '' || !os.is_file(source_file) {
             if build_config.verbose {
                 println('Warning: Source file not found for unit ${unit_name}')
             }
@@ -255,6 +258,8 @@ fn build_from_directives(mut build_config config.BuildConfig, mut shared_libs_bu
         if directive.is_shared {
             // Link shared library
             lib_output := os.join_path(build_config.bin_dir, 'lib', directive.unit_name)
+            // ensure output directory exists
+            os.mkdir_all(lib_output) or { return error('Failed to create shared lib output directory: ${lib_output}') }
             println('Linking shared library: ${lib_output}')
             link_shared_library([obj_file], directive.unit_name, lib_output, build_config, config.SharedLibConfig{
                 name: directive.unit_name
@@ -457,6 +462,11 @@ fn build_shared_library(mut lib_config config.SharedLibConfig, build_config conf
         if needs_recompile(src_file, obj_file) {
             println('Compiling ${lib_config.name}: ${src_file}...')
             lib_target_config := config.TargetConfig(lib_config)
+            // show compile command if verbose
+            if lib_config.verbose || build_config.verbose {
+                cmd_preview := config.build_shared_compiler_command(src_file, obj_file, build_config, lib_target_config)
+                println('Compile command (preview): ${cmd_preview}')
+            }
             compile_tasks << CompileTask{source: src_file, obj: obj_file, target_config: lib_target_config}
         } else {
             if lib_config.verbose {
@@ -478,6 +488,8 @@ fn build_shared_library(mut lib_config config.SharedLibConfig, build_config conf
     
     // Link shared library
     lib_output := os.join_path(lib_config.output_dir, lib_config.name)
+    // ensure output directory exists
+    os.mkdir_all(lib_config.output_dir) or { return error('Failed to create shared lib output directory: ${lib_config.output_dir}') }
     println('Linking shared library: ${lib_output}')
     link_shared_library(object_files, lib_config.name, lib_output, build_config, lib_config) or { 
         return error('Failed to link shared library ${lib_config.name}')
@@ -522,6 +534,11 @@ fn build_tool(mut tool_config config.ToolConfig, build_config config.BuildConfig
         if needs_recompile(src_file, obj_file) {
             println('Compiling ${tool_config.name}: ${src_file}...')
             tool_target_config := config.TargetConfig(tool_config)
+            // show compile command if verbose
+            if tool_config.verbose || build_config.verbose {
+                cmd_preview := config.build_shared_compiler_command(src_file, obj_file, build_config, tool_target_config)
+                println('Compile command (preview): ${cmd_preview}')
+            }
             compile_tasks << CompileTask{source: src_file, obj: obj_file, target_config: tool_target_config}
         } else {
             if tool_config.verbose {
@@ -569,13 +586,14 @@ fn get_target_verbose(target_config config.TargetConfig) bool {
 
 fn compile_file(source_file string, object_file string, build_config config.BuildConfig, target_config config.TargetConfig) !string {
     cmd := config.build_shared_compiler_command(source_file, object_file, build_config, target_config)
-    
+
     target_verbose := get_target_verbose(target_config)
-    
+
     if target_verbose {
         println('Compile command: ${cmd}')
     }
-    
+
+    // Execute compile
     res := os.execute(cmd)
     if res.exit_code != 0 {
         return error('Compilation failed with exit code ${res.exit_code}:\n${res.output}')
@@ -766,6 +784,11 @@ fn find_source_files(dir string) ![]string {
 }
 
 fn needs_recompile(source_file string, object_file string) bool {
+    if !os.is_file(source_file) {
+        // source missing, signal recompile to allow upstream code to handle error
+        return true
+    }
+
     src_mtime := os.file_last_mod_unix(source_file)
     obj_mtime := if os.is_file(object_file) {
         os.file_last_mod_unix(object_file)

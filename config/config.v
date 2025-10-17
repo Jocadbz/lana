@@ -89,7 +89,7 @@ __global:
 
 // default config
 pub const default_config = BuildConfig{
-    project_name: 'project'
+    project_name: ''
     src_dir: 'src'
     build_dir: 'build'
     bin_dir: 'bin'
@@ -135,7 +135,8 @@ pub fn (mut build_config BuildConfig) parse_build_directives() ! {
                 continue
             }
             
-            parts := line[17..].trim_space().split('(')
+            // slice after the prefix '// build-directive:' (19 characters)
+            parts := line[19..].trim_space().split('(')
             if parts.len != 2 {
                 continue
             }
@@ -292,10 +293,10 @@ pub fn parse_args() !BuildConfig {
             else {
                 if !arg.starts_with('-') {
                     // Treat as project name or first source file
-                    if build_config.project_name == 'project' {
+                    if build_config.project_name == '' {
                         build_config.project_name = arg
                     } else {
-                        // Add as default tool
+                        // Add as default tool using the project name
                         mut default_tool := ToolConfig{
                             name: build_config.project_name
                             sources: [arg]
@@ -553,6 +554,61 @@ pub fn parse_config_file(filename string) !BuildConfig {
         if !tool.optimize { tool.optimize = build_config.optimize }
         if !tool.verbose { tool.verbose = build_config.verbose }
     }
+
+    // Merge global flags and includes into individual shared libs and tools
+    for mut lib in build_config.shared_libs {
+        // merge include dirs
+        for inc in build_config.include_dirs {
+            if inc != '' && inc !in lib.include_dirs {
+                lib.include_dirs << inc
+            }
+        }
+        // merge cflags
+        for flag in build_config.cflags {
+            if flag != '' && flag !in lib.cflags {
+                lib.cflags << flag
+            }
+        }
+        // merge ldflags
+        for flag in build_config.ldflags {
+            if flag != '' && flag !in lib.ldflags {
+                lib.ldflags << flag
+            }
+        }
+        // merge project libraries
+        for library in build_config.libraries {
+            if library != '' && library !in lib.libraries {
+                lib.libraries << library
+            }
+        }
+    }
+
+    for mut tool in build_config.tools {
+        // merge include dirs
+        for inc in build_config.include_dirs {
+            if inc != '' && inc !in tool.include_dirs {
+                tool.include_dirs << inc
+            }
+        }
+        // merge cflags
+        for flag in build_config.cflags {
+            if flag != '' && flag !in tool.cflags {
+                tool.cflags << flag
+            }
+        }
+        // merge ldflags
+        for flag in build_config.ldflags {
+            if flag != '' && flag !in tool.ldflags {
+                tool.ldflags << flag
+            }
+        }
+        // merge project libraries
+        for library in build_config.libraries {
+            if library != '' && library !in tool.libraries {
+                tool.libraries << library
+            }
+        }
+    }
     
     return build_config
 }
@@ -630,7 +686,7 @@ pub fn build_shared_compiler_command(source_file string, object_file string, bui
     }
     
     // Add standard flags
-    cmd += ' -Wall -Wextra -std=c++17'
+    cmd += ' -Wall -Wextra'
     
     // Add global CFLAGS
     for flag in build_config.cflags {
@@ -691,13 +747,16 @@ pub fn build_shared_linker_command(object_files []string, library_name string, o
     }
     
     // Set output name (with platform-specific extension)
-    mut lib_name := library_name
+    // Use only the basename of the library to avoid duplicating path segments
+    parts := library_name.split('/')
+    base_name := if parts.len > 0 { parts[parts.len - 1] } else { library_name }
+    mut lib_name := base_name
     $if windows {
         lib_name += '.dll'
     } $else {
         lib_name += '.so'
     }
-    
+
     cmd += ' -o ${output_path}/${lib_name}'
     return cmd
 }
@@ -772,7 +831,7 @@ pub fn build_compiler_command(source_file string, object_file string, build_conf
     }
     
     // Add standard flags
-    cmd += ' -Wall -Wextra -std=c++17'
+    cmd += ' -Wall -Wextra'
     
     // Add custom CFLAGS
     for flag in build_config.cflags {
