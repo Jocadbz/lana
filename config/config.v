@@ -575,12 +575,8 @@ pub fn parse_config_file(filename string) !BuildConfig {
                 lib.ldflags << flag
             }
         }
-        // merge project libraries
-        for library in build_config.libraries {
-            if library != '' && library !in lib.libraries {
-                lib.libraries << library
-            }
-        }
+        // Do NOT merge global libraries into shared lib 'libraries' here.
+        // Global libraries should be linked globally during linker command assembly, not as per-target shared lib dependencies.
     }
 
     for mut tool in build_config.tools {
@@ -602,12 +598,8 @@ pub fn parse_config_file(filename string) !BuildConfig {
                 tool.ldflags << flag
             }
         }
-        // merge project libraries
-        for library in build_config.libraries {
-            if library != '' && library !in tool.libraries {
-                tool.libraries << library
-            }
-        }
+        // Do NOT merge global libraries into tool 'libraries' here.
+        // Keep per-tool libraries strictly those declared for the tool; global libraries will be added at link time.
     }
     
     return build_config
@@ -731,10 +723,19 @@ pub fn build_shared_linker_command(object_files []string, library_name string, o
         }
     }
     
-    // Add this library's dependencies
+    // Add this library's dependencies (hardcode to filename form: -l:<name>.so)
     for library in lib_config.libraries {
         if library != '' {
-            cmd += ' -l:${library}.so'
+            // strip any existing .so or lib/ prefix and ensure we request the explicit filename
+            mut libfile := library
+            if libfile.starts_with('lib/') {
+                parts := libfile.split('/')
+                libfile = parts[parts.len - 1]
+            }
+            if libfile.ends_with('.so') {
+                libfile = libfile.replace('.so', '')
+            }
+            cmd += ' -l:${libfile}.so'
         }
     }
     
@@ -788,10 +789,18 @@ pub fn build_tool_linker_command(object_files []string, executable string, build
         }
     }
     
-    // Add this tool's dependencies (shared libs)
+    // Add this tool's dependencies (shared libs) — hardcode to explicit .so filenames
     for library in tool_config.libraries {
         if library != '' {
-            cmd += ' -l:${library}.so'
+            mut libfile := library
+            if libfile.starts_with('lib/') {
+                parts := libfile.split('/')
+                libfile = parts[parts.len - 1]
+            }
+            if libfile.ends_with('.so') {
+                libfile = libfile.replace('.so', '')
+            }
+            cmd += ' -l:${libfile}.so'
         }
     }
     

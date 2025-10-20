@@ -107,71 +107,82 @@ fn run_compile_tasks(tasks []CompileTask, build_config config.BuildConfig) ![]st
 }
 
 pub fn build(mut build_config config.BuildConfig) ! {
+    // Run build flow and ensure that if any error occurs we print its message
     println('Building ${build_config.project_name}...')
-    
-    // Create directories
-    os.mkdir_all(build_config.build_dir) or { return error('Failed to create build directory') }
-    os.mkdir_all(build_config.bin_dir) or { return error('Failed to create bin directory') }
-    os.mkdir_all('${build_config.bin_dir}/lib') or { return error('Failed to create lib directory') }
-    os.mkdir_all('${build_config.bin_dir}/tools') or { return error('Failed to create tools directory') }
-    if build_config.shaders_dir != '' && build_config.shaders_dir != 'bin/shaders' {
-        os.mkdir_all(build_config.shaders_dir) or { return error('Failed to create shaders directory') }
-    }
-    
-    // Auto-discover sources if not specified
-    auto_discover_sources(mut build_config)
-    
-    // Build shared libraries first (from config)
-    mut shared_libs_built := []string{}
-    for mut lib_config in build_config.shared_libs {
-        if lib_config.sources.len == 0 {
+
+    run_build := fn (mut build_config config.BuildConfig) ! {
+        // Create directories
+        os.mkdir_all(build_config.build_dir) or { return error('Failed to create build directory') }
+        os.mkdir_all(build_config.bin_dir) or { return error('Failed to create bin directory') }
+        os.mkdir_all('${build_config.bin_dir}/lib') or { return error('Failed to create lib directory') }
+        os.mkdir_all('${build_config.bin_dir}/tools') or { return error('Failed to create tools directory') }
+        if build_config.shaders_dir != '' && build_config.shaders_dir != 'bin/shaders' {
+            os.mkdir_all(build_config.shaders_dir) or { return error('Failed to create shaders directory') }
+        }
+
+        // Auto-discover sources if not specified
+        auto_discover_sources(mut build_config)
+
+        // Build shared libraries first (from config)
+        mut shared_libs_built := []string{}
+        for mut lib_config in build_config.shared_libs {
+            if lib_config.sources.len == 0 {
+                if build_config.verbose {
+                    println('Skipping empty shared library: ${lib_config.name}')
+                }
+                continue
+            }
+
+            println('Building shared library: ${lib_config.name}')
+            build_shared_library(mut lib_config, build_config) or {
+                return error('Failed to build shared library ${lib_config.name}: ${err}')
+            }
+            shared_libs_built << lib_config.name
             if build_config.verbose {
-                println('Skipping empty shared library: ${lib_config.name}')
+                println('Built shared library: ${lib_config.name}')
             }
-            continue
         }
-        
-        println('Building shared library: ${lib_config.name}')
-        build_shared_library(mut lib_config, build_config) or {
-            return error('Failed to build shared library ${lib_config.name}: ${err}')
-        }
-        shared_libs_built << lib_config.name
-        if build_config.verbose {
-            println('Built shared library: ${lib_config.name}')
-        }
-    }
-    
-    // Build targets from build directives
-    build_from_directives(mut build_config, mut shared_libs_built)!
-    
-    // Build tools/executables from config
-    for mut tool_config in build_config.tools {
-        if tool_config.sources.len == 0 {
+
+        // Build targets from build directives
+        build_from_directives(mut build_config, mut shared_libs_built)!
+
+        // Build tools/executables from config
+        for mut tool_config in build_config.tools {
+            if tool_config.sources.len == 0 {
+                if build_config.verbose {
+                    println('Skipping empty tool: ${tool_config.name}')
+                }
+                continue
+            }
+
+            println('Building tool: ${tool_config.name}')
+            build_tool(mut tool_config, build_config) or {
+                return error('Failed to build tool ${tool_config.name}: ${err}')
+            }
             if build_config.verbose {
-                println('Skipping empty tool: ${tool_config.name}')
-            }
-            continue
-        }
-        
-        println('Building tool: ${tool_config.name}')
-        build_tool(mut tool_config, build_config) or {
-            return error('Failed to build tool ${tool_config.name}: ${err}')
-        }
-        if build_config.verbose {
-            println('Built tool: ${tool_config.name}')
-        }
-    }
-    
-    // Build shaders if configured and directory exists
-    if build_config.shaders_dir != '' {
-        compile_shaders(build_config) or { 
-            if !build_config.verbose {
-                println('Warning: Failed to compile shaders: ${err}')
+                println('Built tool: ${tool_config.name}')
             }
         }
+
+        // Build shaders if configured and directory exists
+        if build_config.shaders_dir != '' {
+            compile_shaders(build_config) or { 
+                if !build_config.verbose {
+                    println('Warning: Failed to compile shaders: ${err}')
+                }
+            }
+        }
+
+        println('Build completed successfully!')
+        return
     }
-    
-    println('Build completed successfully!')
+
+    // Execute build and show full error output if something fails
+    run_build(mut build_config) or {
+        // Print error message to help debugging
+        println('Build failed: ${err}')
+        return err
+    }
 }
 
 // Build targets based on build directives from source files
@@ -202,25 +213,43 @@ fn build_from_directives(mut build_config config.BuildConfig, mut shared_libs_bu
         
         // Find source file for this unit
         mut source_file := ''
-        for src_path in directive.unit_name.split('/') {
-            source_file = os.join_path(build_config.src_dir, src_path + '.cpp')
-            if os.is_file(source_file) {
-                break
+    // First try the full unit path (e.g., src/lib/file.cpp)
+    mut candidate := os.join_path(build_config.src_dir, directive.unit_name + '.cpp')
+        if os.is_file(candidate) {
+            source_file = candidate
+        } else {
+            candidate = os.join_path(build_config.src_dir, directive.unit_name + '.cc')
+            if os.is_file(candidate) {
+                source_file = candidate
+            } else {
+                candidate = os.join_path(build_config.src_dir, directive.unit_name + '.cxx')
+                if os.is_file(candidate) {
+                    source_file = candidate
+                }
             }
-            source_file = os.join_path(build_config.src_dir, src_path + '.cc')
-            if os.is_file(source_file) {
-                break
-            }
-            source_file = os.join_path(build_config.src_dir, src_path + '.cxx')
-            if os.is_file(source_file) {
-                break
-            }
-            // if none matched, reset to empty for next iteration
-            source_file = ''
         }
 
-        // Ensure the found source actually exists; avoid using last attempted extension if none matched
-        if source_file == '' || !os.is_file(source_file) {
+        // Fallback: try only the basename (e.g., src/file.cpp) for legacy layouts
+        if source_file == '' {
+            parts := directive.unit_name.split('/')
+            base := if parts.len > 0 { parts[parts.len - 1] } else { directive.unit_name }
+            candidate = os.join_path(build_config.src_dir, base + '.cpp')
+            if os.is_file(candidate) {
+                source_file = candidate
+            } else {
+                candidate = os.join_path(build_config.src_dir, base + '.cc')
+                if os.is_file(candidate) {
+                    source_file = candidate
+                } else {
+                    candidate = os.join_path(build_config.src_dir, base + '.cxx')
+                    if os.is_file(candidate) {
+                        source_file = candidate
+                    }
+                }
+            }
+        }
+
+        if source_file == '' {
             if build_config.verbose {
                 println('Warning: Source file not found for unit ${unit_name}')
             }
@@ -257,11 +286,17 @@ fn build_from_directives(mut build_config config.BuildConfig, mut shared_libs_bu
         // Link executable or shared library
         if directive.is_shared {
             // Link shared library
-            lib_output := os.join_path(build_config.bin_dir, 'lib', directive.unit_name)
+            // place shared libs directly under bin/lib (not nested by unit name)
+            lib_output_dir := os.join_path(build_config.bin_dir, 'lib')
             // ensure output directory exists
-            os.mkdir_all(lib_output) or { return error('Failed to create shared lib output directory: ${lib_output}') }
-            println('Linking shared library: ${lib_output}')
-            link_shared_library([obj_file], directive.unit_name, lib_output, build_config, config.SharedLibConfig{
+            os.mkdir_all(lib_output_dir) or { return error('Failed to create shared lib output directory: ${lib_output_dir}') }
+            println('Linking shared library: ${lib_output_dir}/${directive.unit_name.split('/').last()}.so')
+            if build_config.verbose {
+                // show contents of lib dir for debugging
+                files := os.ls(lib_output_dir) or { []string{} }
+                println('Contents of ${lib_output_dir}: ${files}')
+            }
+            link_shared_library([obj_file], directive.unit_name, lib_output_dir, build_config, config.SharedLibConfig{
                 name: directive.unit_name
                 libraries: directive.link_libs
                 debug: build_config.debug
@@ -487,11 +522,12 @@ fn build_shared_library(mut lib_config config.SharedLibConfig, build_config conf
     }
     
     // Link shared library
-    lib_output := os.join_path(lib_config.output_dir, lib_config.name)
+    // place shared libs directly under the configured output dir
+    lib_output_dir := lib_config.output_dir
     // ensure output directory exists
-    os.mkdir_all(lib_config.output_dir) or { return error('Failed to create shared lib output directory: ${lib_config.output_dir}') }
-    println('Linking shared library: ${lib_output}')
-    link_shared_library(object_files, lib_config.name, lib_output, build_config, lib_config) or { 
+    os.mkdir_all(lib_output_dir) or { return error('Failed to create shared lib output directory: ${lib_output_dir}') }
+    println('Linking shared library: ${lib_output_dir}/${lib_config.name.split('/').last()}.so')
+    link_shared_library(object_files, lib_config.name, lib_output_dir, build_config, lib_config) or { 
         return error('Failed to link shared library ${lib_config.name}')
     }
     
@@ -596,7 +632,10 @@ fn compile_file(source_file string, object_file string, build_config config.Buil
     // Execute compile
     res := os.execute(cmd)
     if res.exit_code != 0 {
-        return error('Compilation failed with exit code ${res.exit_code}:\n${res.output}')
+        // Print compile command and raw output to aid debugging
+        println('Compile command: ${cmd}')
+        println('Compiler output:\n${res.output}')
+        return error('Compilation failed with exit code ${res.exit_code}: ${res.output}')
     }
     
     // Generate dependency file
@@ -612,10 +651,14 @@ fn link_shared_library(object_files []string, library_name string, output_path s
     if lib_config.verbose {
         println('Shared lib link command: ${cmd}')
     }
-    
+
     res := os.execute(cmd)
     if res.exit_code != 0 {
-        return error('Shared library linking failed with exit code ${res.exit_code}:\n${res.output}')
+        // Always print the linker command and its raw output to aid debugging
+        println('Linker command: ${cmd}')
+        // print raw output (may contain stdout and stderr merged by os.execute)
+        println('Linker output:\n${res.output}')
+        return error('Shared library linking failed with exit code ${res.exit_code}: ${res.output}')
     }
 }
 
@@ -625,10 +668,13 @@ fn link_tool(object_files []string, executable string, build_config config.Build
     if tool_config.verbose {
         println('Tool link command: ${cmd}')
     }
-    
+
     res := os.execute(cmd)
     if res.exit_code != 0 {
-        return error('Tool linking failed with exit code ${res.exit_code}:\n${res.output}')
+        // Always print the linker command and its raw output to aid debugging
+        println('Linker command: ${cmd}')
+        println('Linker output:\n${res.output}')
+        return error('Tool linking failed with exit code ${res.exit_code}: ${res.output}')
     }
 }
 
@@ -752,9 +798,22 @@ fn find_glslc() !string {
 }
 
 fn get_object_file(source_file string, object_dir string) string {
-    // Replace src_dir with object_dir and change extension to .o
-    mut obj_file := source_file.replace('src', object_dir)
-    obj_file = obj_file.replace('.cpp', '.o').replace('.cc', '.o').replace('.cxx', '.o')
+    // Compute object file path by preserving the path under src/ and placing it under object_dir
+    // e.g., src/lib/file.cpp -> <object_dir>/lib/file.o
+    // Detect the 'src' prefix and compute relative path
+    rel := if source_file.starts_with('src/') {
+        source_file[4..]
+    } else if source_file.starts_with('./src/') {
+        source_file[6..]
+    } else {
+        // fallback: use basename
+        os.base(source_file)
+    }
+
+    // strip extension and add .o using basename to avoid nested paths under object_dir
+    rel_no_ext := rel.replace('.cpp', '').replace('.cc', '').replace('.cxx', '')
+    base_name := os.base(rel_no_ext)
+    obj_file := os.join_path(object_dir, base_name + '.o')
     return obj_file
 }
 
