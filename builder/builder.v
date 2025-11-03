@@ -127,13 +127,15 @@ pub fn build(mut build_config config.BuildConfig) ! {
         mut shared_libs_built := []string{}
         for mut lib_config in build_config.shared_libs {
             if lib_config.sources.len == 0 {
-                if build_config.verbose {
+                if build_config.debug || build_config.verbose || lib_config.debug || lib_config.verbose {
                     println('Skipping empty shared library: ${lib_config.name}')
                 }
                 continue
             }
 
-            println('Building shared library: ${lib_config.name}')
+            if build_config.debug || build_config.verbose || lib_config.debug || lib_config.verbose {
+                println('Building shared library: ${lib_config.name}')
+            }
             build_shared_library(mut lib_config, build_config) or {
                 return error('Failed to build shared library ${lib_config.name}: ${err}')
             }
@@ -149,13 +151,15 @@ pub fn build(mut build_config config.BuildConfig) ! {
         // Build tools/executables from config
         for mut tool_config in build_config.tools {
             if tool_config.sources.len == 0 {
-                if build_config.verbose {
+                if build_config.debug || build_config.verbose || tool_config.debug || tool_config.verbose {
                     println('Skipping empty tool: ${tool_config.name}')
                 }
                 continue
             }
 
-            println('Building tool: ${tool_config.name}')
+            if build_config.debug || build_config.verbose || tool_config.debug || tool_config.verbose {
+                println('Building tool: ${tool_config.name}')
+            }
             build_tool(mut tool_config, build_config) or {
                 return error('Failed to build tool ${tool_config.name}: ${err}')
             }
@@ -209,7 +213,9 @@ fn build_from_directives(mut build_config config.BuildConfig, mut shared_libs_bu
     for unit_name in build_order {
         directive := dep_graph[unit_name]
         
-        println('Building unit: ${unit_name}')
+        if build_config.debug || build_config.verbose {
+            println('Building unit: ${unit_name}')
+        }
         
         // Find source file for this unit
         mut source_file := ''
@@ -264,7 +270,9 @@ fn build_from_directives(mut build_config config.BuildConfig, mut shared_libs_bu
         
         // Compile source file
         if needs_recompile(source_file, obj_file) {
-            println('Compiling ${unit_name}: ${source_file}...')
+            if build_config.debug || build_config.verbose {
+                println('Compiling ${unit_name}: ${source_file}...')
+            }
             target_config := config.TargetConfig(config.ToolConfig{
                 name: unit_name
                 sources: [source_file]
@@ -290,7 +298,9 @@ fn build_from_directives(mut build_config config.BuildConfig, mut shared_libs_bu
             lib_output_dir := os.join_path(build_config.bin_dir, 'lib')
             // ensure output directory exists
             os.mkdir_all(lib_output_dir) or { return error('Failed to create shared lib output directory: ${lib_output_dir}') }
-            println('Linking shared library: ${lib_output_dir}/${directive.unit_name.split('/').last()}.so')
+            if build_config.debug || build_config.verbose {
+                println('Linking shared library: ${lib_output_dir}/${directive.unit_name.split('/').last()}.so')
+            }
             if build_config.verbose {
                 // show contents of lib dir for debugging
                 files := os.ls(lib_output_dir) or { []string{} }
@@ -310,7 +320,9 @@ fn build_from_directives(mut build_config config.BuildConfig, mut shared_libs_bu
         } else {
             // Link executable
             executable := os.join_path(build_config.bin_dir, directive.output_path)
-            println('Linking executable: ${executable}')
+            if build_config.debug || build_config.verbose {
+                println('Linking executable: ${executable}')
+            }
             link_tool([obj_file], executable, build_config, config.ToolConfig{
                 name: directive.unit_name
                 libraries: directive.link_libs
@@ -465,7 +477,7 @@ pub fn clean(build_config config.BuildConfig) {
 
 fn build_shared_library(mut lib_config config.SharedLibConfig, build_config config.BuildConfig) ! {
     if lib_config.sources.len == 0 {
-        if build_config.verbose {
+        if build_config.debug || build_config.verbose || lib_config.debug || lib_config.verbose {
             println('No sources specified for shared library ${lib_config.name}, skipping')
         }
         return
@@ -495,7 +507,9 @@ fn build_shared_library(mut lib_config config.SharedLibConfig, build_config conf
         os.mkdir_all(obj_path) or { return error('Failed to create object directory: ${obj_path}') }
 
         if needs_recompile(src_file, obj_file) {
-            println('Compiling ${lib_config.name}: ${src_file}...')
+            if build_config.debug || build_config.verbose || lib_config.debug || lib_config.verbose {
+                println('Compiling ${lib_config.name}: ${src_file}...')
+            }
             lib_target_config := config.TargetConfig(lib_config)
             // show compile command if verbose
             if lib_config.verbose || build_config.verbose {
@@ -526,7 +540,9 @@ fn build_shared_library(mut lib_config config.SharedLibConfig, build_config conf
     lib_output_dir := lib_config.output_dir
     // ensure output directory exists
     os.mkdir_all(lib_output_dir) or { return error('Failed to create shared lib output directory: ${lib_output_dir}') }
-    println('Linking shared library: ${lib_output_dir}/${lib_config.name.split('/').last()}.so')
+    if build_config.debug || build_config.verbose || lib_config.debug || lib_config.verbose {
+        println('Linking shared library: ${lib_output_dir}/${lib_config.name.split('/').last()}.so')
+    }
     link_shared_library(object_files, lib_config.name, lib_output_dir, build_config, lib_config) or { 
         return error('Failed to link shared library ${lib_config.name}')
     }
@@ -538,7 +554,7 @@ fn build_shared_library(mut lib_config config.SharedLibConfig, build_config conf
 
 fn build_tool(mut tool_config config.ToolConfig, build_config config.BuildConfig) ! {
     if tool_config.sources.len == 0 {
-        if build_config.verbose {
+        if build_config.debug || build_config.verbose || tool_config.debug || tool_config.verbose {
             println('No sources specified for tool ${tool_config.name}, skipping')
         }
         return
@@ -568,7 +584,9 @@ fn build_tool(mut tool_config config.ToolConfig, build_config config.BuildConfig
         os.mkdir_all(obj_path) or { return error('Failed to create object directory: ${obj_path}') }
 
         if needs_recompile(src_file, obj_file) {
-            println('Compiling ${tool_config.name}: ${src_file}...')
+            if build_config.debug || build_config.verbose || tool_config.debug || tool_config.verbose {
+                println('Compiling ${tool_config.name}: ${src_file}...')
+            }
             tool_target_config := config.TargetConfig(tool_config)
             // show compile command if verbose
             if tool_config.verbose || build_config.verbose {
@@ -596,7 +614,9 @@ fn build_tool(mut tool_config config.ToolConfig, build_config config.BuildConfig
     
     // Link executable
     executable := os.join_path(tool_config.output_dir, tool_config.name)
-    println('Linking tool: ${executable}')
+    if build_config.debug || build_config.verbose || tool_config.debug || tool_config.verbose {
+        println('Linking tool: ${executable}')
+    }
     link_tool(object_files, executable, build_config, tool_config) or { 
         return error('Failed to link tool ${tool_config.name}')
     }
@@ -721,7 +741,9 @@ fn compile_shaders(build_config config.BuildConfig) ! {
         output_path := os.join_path(shaders_out_dir, output_name)
         
         cmd := '${glslc_path} -o ${output_path} -fshader-stage=vertex ${src_path}'
-        println('Compiling vertex shader: ${shader}')
+        if build_config.debug || build_config.verbose {
+            println('Compiling vertex shader: ${shader}')
+        }
         
         if build_config.verbose {
             println('Shader compile command: ${cmd}')
@@ -750,7 +772,9 @@ fn compile_shaders(build_config config.BuildConfig) ! {
         output_path := os.join_path(shaders_out_dir, output_name)
         
         cmd := '${glslc_path} -o ${output_path} -fshader-stage=fragment ${src_path}'
-        println('Compiling fragment shader: ${shader}')
+        if build_config.debug || build_config.verbose {
+            println('Compiling fragment shader: ${shader}')
+        }
         
         if build_config.verbose {
             println('Shader compile command: ${cmd}')

@@ -91,7 +91,9 @@ pub fn fetch_dependencies(build_config config.BuildConfig) ! {
         }
 
         println('Processing dependency: ${dep.name}')
-        println('  parsed: url="${dep.url}", archive="${dep.archive}", extract_to="${dep.extract_to}"')
+        if build_config.debug || build_config.verbose {
+            println('  parsed: url="${dep.url}", archive="${dep.archive}", extract_to="${dep.extract_to}"')
+        }
 
         // Allow dependencies with only a name. If no URL is provided, skip
         // download/extract/clone steps and only run any provided build_cmds.
@@ -108,10 +110,14 @@ pub fn fetch_dependencies(build_config config.BuildConfig) ! {
             if is_git {
                 // Clone repository if needed
                 if os.is_dir(extract_to) {
-                    println('Dependency already cloned at ${extract_to}, skipping clone')
+                    if build_config.debug || build_config.verbose {
+                        println('Dependency already cloned at ${extract_to}, skipping clone')
+                    }
                 } else {
                     cmd := 'git clone --depth 1 ${url_trim} ${extract_to}'
-                    println('Running: ${cmd}')
+                    if build_config.debug || build_config.verbose {
+                        println('Running: ${cmd}')
+                    }
                     code := os.system(cmd)
                     if code != 0 {
                         return error('Failed to clone ${url_trim}: exit ${code}')
@@ -133,7 +139,9 @@ pub fn fetch_dependencies(build_config config.BuildConfig) ! {
                         }
                     }
                 } else {
-                    println('Archive already exists: ${archive_path}')
+                    if build_config.debug || build_config.verbose {
+                        println('Archive already exists: ${archive_path}')
+                    }
                 }
 
                 // Optionally verify checksum
@@ -152,7 +160,9 @@ pub fn fetch_dependencies(build_config config.BuildConfig) ! {
 
                 // Extract archive
                 if os.is_dir(extract_to) {
-                    println('Already extracted to ${extract_to}, skipping')
+                    if build_config.debug || build_config.verbose {
+                        println('Already extracted to ${extract_to}, skipping')
+                    }
                 } else {
                     os.mkdir_all(extract_to) or { return error('Failed to create ${extract_to}: ${err}') }
 
@@ -160,7 +170,9 @@ pub fn fetch_dependencies(build_config config.BuildConfig) ! {
                     lower := archive_path.to_lower()
                     if lower.ends_with('.tar.gz') || lower.ends_with('.tgz') || lower.ends_with('.tar.xz') || lower.ends_with('.tar') {
                         cmd := 'tar -xf ${archive_path} -C ${deps_dir}'
-                        println('Extracting with: ${cmd}')
+                        if build_config.debug || build_config.verbose {
+                            println('Extracting with: ${cmd}')
+                        }
                         code := os.system(cmd)
                         if code != 0 {
                             return error('Failed to extract ${archive_path}: exit ${code}')
@@ -168,7 +180,9 @@ pub fn fetch_dependencies(build_config config.BuildConfig) ! {
                         // If the archive created a top-level dir, caller should set extract_to to match archive content.
                     } else if lower.ends_with('.zip') {
                         cmd := 'unzip -q ${archive_path} -d ${extract_to}'
-                        println('Extracting zip with: ${cmd}')
+                        if build_config.debug || build_config.verbose {
+                            println('Extracting zip with: ${cmd}')
+                        }
                         code := os.system(cmd)
                         if code != 0 {
                             return error('Failed to unzip ${archive_path}: exit ${code}')
@@ -192,7 +206,9 @@ pub fn fetch_dependencies(build_config config.BuildConfig) ! {
             }
 
             for cmd_line in dep.build_cmds {
-                println('Running build command for ${dep.name}: ${cmd_line}')
+                if build_config.debug || build_config.verbose {
+                    println('Running build command for ${dep.name}: ${cmd_line}')
+                }
                 old_cwd := os.getwd()
                 os.chdir(run_dir) or { return error('Failed to chdir: ${err}') }
                 code := os.system(cmd_line)
