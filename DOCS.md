@@ -24,7 +24,7 @@ Key features:
 - **Build directives** embedded directly in C++ source files for per-file configuration (dependencies, linking, output, flags)
 - **Dependency tracking** via `#include` analysis and timestamp checking
 - **Incremental builds** to recompile only changed files
-- **Support for shared libraries, tools/executables, and GLSL shaders**
+- **Support for shared libraries, tools/executables, and asset hooks (e.g., GLSL shaders via dependencies)**
 - **Simple global configuration** via `config.ini`
 - **Cross-platform** (Linux, macOS, Windows) with parallel compilation
 - **No external scripts needed**—everything is in your source files
@@ -37,7 +37,7 @@ Lana parses `// build-directive:` comments in your C++ files to handle project-s
 - V compiler (version 0.3.0 or later)
 - GCC/G++ (version 7+ recommended)
 - Standard C++ library
-- For shaders: Vulkan SDK or shaderc (includes `glslc`)
+- For shader workflows: Vulkan SDK or shaderc (includes `glslc`)
 
 ### Building Lana
 
@@ -74,14 +74,12 @@ project/
 │   │   └── cli.cpp   # Example shared lib (directives at top)
 │   ├── tools/        # Tool/executable sources
 │   │   └── example_tool.cpp  # Example tool depending on lib/cli
-│   └── shaders/      # GLSL shaders (.vsh, .fsh)
 ├── include/          # Header files (.h, .hpp)
 │   └── cli.h         # Example header
 ├── build/            # Generated: Object files (*.o), dependencies (*.d)
 ├── bin/              # Generated: Executables and libs
 │   ├── lib/          # Shared libraries (.so/.dll)
 │   ├── tools/        # Tool executables
-│   └── shaders/      # Compiled shaders (.spv)
 ├── config.ini        # Global build configuration
 ├── README.md         # Project docs (auto-generated with directive examples)
 └── .gitignore        # Ignores build artifacts
@@ -89,7 +87,6 @@ project/
 
 - **Build Directives**: Add `// build-directive:` comments at the top of C++ files for per-file settings (see [Build Directives](#build-directives)).
 - **Auto-Discovery**: If no directives, Lana treats files as simple tools using global config.
-- **Shaders**: Place `.vsh` (vertex) and `.fsh` (fragment) files in `src/shaders/`; set `shaders_dir` in config to enable compilation.
 
 ## Commands
 
@@ -208,7 +205,6 @@ ldflags =
 
 # Advanced
 parallel_compilation = true
-shaders_dir = bin/shaders  # Enable shader compilation
 dependencies_dir = dependencies
 ```
 
@@ -306,7 +302,7 @@ int main() {
 - **Order**: Directives before `#include` or code.
 - **Empty Values**: Use `()` for none (e.g., `depends-units()`).
 - **Global Interaction**: Directives add to `config.ini` settings (e.g., global `-Wall` + per-file `-std=c++20`).
-- **Shaders**: No directives needed; auto-compiles if `shaders_dir` set.
+- **Assets**: Use `[dependencies]` hooks for non-C++ steps (e.g., shader compilation).
 - **Legacy**: Use `[shared_libs]`/`[tools]` in config for manual lists (overrides auto-parsing).
 
 ## Build Process
@@ -317,7 +313,7 @@ int main() {
 4. **Incremental Check**: Recompiles if source/header newer than `.o` or `.d` missing.
 5. **Compilation**: `g++ -c` each source to `.o` (uses global + per-file flags).
 6. **Linking**: Builds shared libs/tools per directives (e.g., `g++ -shared` for libs).
-7. **Shaders** (if enabled): Compiles `.vsh`/`.fsh` to `.spv` with `glslc`.
+7. **Dependency Hooks**: Executes `[dependencies]` build commands (use for assets like shaders).
 
 **Example Output** (`lana build -v`):
 ```
@@ -400,8 +396,6 @@ libraries =
 name = main
 sources = src/main.cpp
 libraries = cli
-
-shaders_dir = bin/shaders  # Enable shaders
 ```
 
 ## Troubleshooting
@@ -412,7 +406,7 @@ shaders_dir = bin/shaders  # Enable shaders
 - **"Failed to parse directive"**: Verify syntax (e.g., `unit-name(lib/cli)`); use `-v` for details.
 - **"Dependency not found"**: Add missing `depends-units()` or build order in directives.
 - **Linking errors**: Check `link()` for libs; install dev packages (e.g., `sudo apt install libpthread-dev`).
-- **Shader compilation fails**: Install Vulkan SDK (`glslc`); verify `shaders_dir` in config.
+- **Asset build fails**: Verify commands in `[dependencies]` hook scripts (e.g., shader toolchain).
 - **Permission denied**: `chmod +x bin/tools/mytool`.
 
 ### Debugging Tips

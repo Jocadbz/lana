@@ -78,7 +78,6 @@ __global:
     // New fields for shared library support
     shared_libs []SharedLibConfig
     tools       []ToolConfig
-    shaders_dir string = 'bin/shaders' // for shader compilation
     dependencies_dir string = 'dependencies' // external dependencies
     parallel_compilation bool = true // enable parallel builds
     dependencies []Dependency
@@ -394,7 +393,6 @@ pub fn parse_config_file(filename string) !BuildConfig {
                             flags := value.split(' ')
                             for flag in flags { build_config.ldflags << flag.trim_space() }
                         }
-                        'shaders_dir' { build_config.shaders_dir = value }
                         'dependencies_dir' { build_config.dependencies_dir = value }
                         else {}
                     }

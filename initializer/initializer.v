@@ -12,13 +12,11 @@ pub fn init_project(project_name string) {
         'src/lib/net',
         'src/lib/game',
         'src/tools',
-        'src/shaders',
         'include',
         'build',
         'bin',
         'bin/lib',
-        'bin/tools',
-        'bin/shaders'
+    'bin/tools'
     ]
     for dir in dirs {
         full_path := os.join_path(project_name, dir)
@@ -76,16 +74,6 @@ int main() {
 }
 '
     os.write_file(os.join_path(project_name, 'src/tools', 'example_tool.cpp'), tool_content) or { }
-    
-    // Create example shader
-    vertex_shader := r'
-#version 450
-layout(location = 0) in vec3 position;
-void main() {
-    gl_Position = vec4(position, 1.0);
-}
-'
-    os.write_file(os.join_path(project_name, 'src/shaders', 'basic.vsh'), vertex_shader) or { }
     
     // Create .gitignore
     gitignore_content := r'
@@ -145,8 +133,6 @@ ldflags =
 # These are for legacy support or manual configuration
 # Most tools should use build directives in source files
 
-# Uncomment for shader support
-# shaders_dir = bin/shaders
 '
     os.write_file(os.join_path(project_name, 'config.ini'), config_content) or { }
     
@@ -182,13 +168,11 @@ lana clean
 - `src/` - Source files (.cpp, .cc, .cxx)
   - `lib/` - Shared library sources
   - `tools/` - Tool/executable sources
-  - `shaders/` - GLSL shader files (.vsh, .fsh)
 - `include/` - Header files (.h, .hpp)  
 - `build/` - Object files and intermediate build files
 - `bin/` - Executable output
   - `lib/` - Shared libraries (.so/.dll)
   - `tools/` - Tool executables
-  - `shaders/` - Compiled shaders (.spv)
 - `config.ini` - Build configuration
 
 ## Build Directives
@@ -277,12 +261,6 @@ sources = src/tools/example_tool.cpp
 libraries = cli
 ```
 
-### Shader Support
-```ini
-# Uncomment to enable shader compilation
-shaders_dir = bin/shaders
-```
-
 ## Command Line Options
 ```bash
 lana build [options]
@@ -306,7 +284,7 @@ lana build [options]
 2. **Build dependency graph** based on unit dependencies
 3. **Compile source files** to object files
 4. **Link libraries and executables** according to directives
-5. **Compile shaders** if configured
+5. **Execute dependency hooks** declared under `[dependencies]` (ideal for assets like shaders)
 
 The build system automatically handles:
 - Dependency resolution and build ordering
@@ -412,5 +390,5 @@ namespace lana {
     println('Configuration:')
     println('  Edit config.ini for global build settings')
     println('  Add your C++ source files to src/lib/ and src/tools/')
-    println('  Add GLSL shaders to src/shaders/ (.vsh, .fsh)')
+    println('  Use [dependencies] entries for extra asset steps (e.g., shader compilation)')
 }

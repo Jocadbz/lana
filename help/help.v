@@ -48,12 +48,10 @@ pub fn show_help() {
     println('  src/           - Source files (.cpp, .cc, .cxx)')
     println('    lib/         - Shared library sources')
     println('    tools/       - Tool/executable sources')
-    println('    shaders/     - GLSL shader files (.vsh, .fsh)')
     println('  include/       - Header files (.h, .hpp)')
     println('  build/         - Object files and intermediates')
     println('  bin/           - Output')
     println('    lib/         - Shared libraries (.so/.dll)')
     println('    tools/       - Executables')
-    println('    shaders/     - Compiled shaders (.spv)')
     println('  config.ini     - Build configuration')
 }

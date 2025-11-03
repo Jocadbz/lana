@@ -116,9 +116,6 @@ pub fn build(mut build_config config.BuildConfig) ! {
         os.mkdir_all(build_config.bin_dir) or { return error('Failed to create bin directory') }
         os.mkdir_all('${build_config.bin_dir}/lib') or { return error('Failed to create lib directory') }
         os.mkdir_all('${build_config.bin_dir}/tools') or { return error('Failed to create tools directory') }
-        if build_config.shaders_dir != '' && build_config.shaders_dir != 'bin/shaders' {
-            os.mkdir_all(build_config.shaders_dir) or { return error('Failed to create shaders directory') }
-        }
 
         // Auto-discover sources if not specified
         auto_discover_sources(mut build_config)
@@ -165,15 +162,6 @@ pub fn build(mut build_config config.BuildConfig) ! {
             }
             if build_config.verbose {
                 println('Built tool: ${tool_config.name}')
-            }
-        }
-
-        // Build shaders if configured and directory exists
-        if build_config.shaders_dir != '' {
-            compile_shaders(build_config) or { 
-                if !build_config.verbose {
-                    println('Warning: Failed to compile shaders: ${err}')
-                }
             }
         }
 
@@ -450,19 +438,6 @@ pub fn clean(build_config config.BuildConfig) {
         }
     }
     
-    // Remove shaders directory if it exists
-    shaders_dir := if build_config.shaders_dir.starts_with('bin/') {
-        os.join_path(build_config.bin_dir, build_config.shaders_dir[4..])
-    } else {
-        build_config.shaders_dir
-    }
-    if os.is_dir(shaders_dir) {
-        os.rmdir_all(shaders_dir) or {
-            println('Warning: Failed to remove ${shaders_dir}: ${err}')
-        }
-        println('Removed ${shaders_dir}')
-    }
-    
     // Remove main executable if it exists (backward compatibility)
     main_exe := os.join_path(build_config.bin_dir, build_config.project_name)
     if os.is_file(main_exe) {
@@ -696,129 +671,6 @@ fn link_tool(object_files []string, executable string, build_config config.Build
         println('Linker output:\n${res.output}')
         return error('Tool linking failed with exit code ${res.exit_code}: ${res.output}')
     }
-}
-
-fn compile_shaders(build_config config.BuildConfig) ! {
-    shaders_src_dir := 'src/shaders'
-    if !os.is_dir(shaders_src_dir) {
-        if build_config.verbose {
-            println('No shaders directory found, skipping shader compilation')
-        }
-        return
-    }
-    
-    println('Compiling shaders...')
-    
-    // Find glslc compiler
-    glslc_path := find_glslc() or { 
-        println('Warning: glslc compiler not found, skipping shader compilation')
-        return 
-    }
-    
-    // Get shaders directory
-    shaders_out_dir := if build_config.shaders_dir.starts_with('bin/') {
-        os.join_path(build_config.bin_dir, build_config.shaders_dir[4..])
-    } else {
-        build_config.shaders_dir
-    }
-    
-    os.mkdir_all(shaders_out_dir) or { return error('Failed to create shaders output directory') }
-    
-    // List all shader files
-    shader_files := os.ls(shaders_src_dir) or { return error('Failed to list shaders directory') }
-    mut shader_count := 0
-    mut success_count := 0
-    
-    // Compile vertex shaders (.vsh)
-    for shader in shader_files {
-        if !shader.ends_with('.vsh') {
-            continue
-        }
-        
-        shader_count++
-        src_path := os.join_path(shaders_src_dir, shader)
-        output_name := shader.replace('.vsh', '.vsh.spv')
-        output_path := os.join_path(shaders_out_dir, output_name)
-        
-        cmd := '${glslc_path} -o ${output_path} -fshader-stage=vertex ${src_path}'
-        if build_config.debug || build_config.verbose {
-            println('Compiling vertex shader: ${shader}')
-        }
-        
-        if build_config.verbose {
-            println('Shader compile command: ${cmd}')
-        }
-        
-        res := os.execute(cmd)
-        if res.exit_code != 0 {
-            println('Error compiling ${shader}: ${res.output}')
-        } else {
-            success_count++
-            if build_config.verbose {
-                println('Compiled: ${shader} -> ${output_path}')
-            }
-        }
-    }
-    
-    // Compile fragment shaders (.fsh)
-    for shader in shader_files {
-        if !shader.ends_with('.fsh') {
-            continue
-        }
-        
-        shader_count++
-        src_path := os.join_path(shaders_src_dir, shader)
-        output_name := shader.replace('.fsh', '.fsh.spv')
-        output_path := os.join_path(shaders_out_dir, output_name)
-        
-        cmd := '${glslc_path} -o ${output_path} -fshader-stage=fragment ${src_path}'
-        if build_config.debug || build_config.verbose {
-            println('Compiling fragment shader: ${shader}')
-        }
-        
-        if build_config.verbose {
-            println('Shader compile command: ${cmd}')
-        }
-        
-        res := os.execute(cmd)
-        if res.exit_code != 0 {
-            println('Error compiling ${shader}: ${res.output}')
-        } else {
-            success_count++
-            if build_config.verbose {
-                println('Compiled: ${shader} -> ${output_path}')
-            }
-        }
-    }
-    
-    if shader_count == 0 {
-        println('No shaders found to compile')
-    } else {
-        println('Shader compilation complete: ${success_count}/${shader_count} successful')
-    }
-}
-
-fn find_glslc() !string {
-    // Check common locations
-    paths := [
-        '/usr/bin/glslc',
-        '/usr/local/bin/glslc',
-        '/opt/homebrew/bin/glslc' // macOS
-    ]
-    
-    for path in paths {
-        if os.is_file(path) {
-            return path
-        }
-    }
-    
-    // Try PATH using os.which
-    glslc_path := os.find_abs_path_of_executable('glslc') or { panic(err) }
-    if glslc_path != '' {
-        return glslc_path
-    }
-    
-    return error('glslc not found. Install Vulkan SDK or shaderc')
 }
 
 fn get_object_file(source_file string, object_dir string) string {
