@@ -37,6 +37,25 @@ struct CompileResult {
     err string
 }
 
+const (
+    ansi_reset = '\x1b[0m'
+    ansi_red = '\x1b[31m'
+    ansi_green = '\x1b[32m'
+    ansi_yellow = '\x1b[33m'
+    ansi_cyan = '\x1b[36m'
+)
+
+fn should_use_color() bool {
+    return os.getenv('NO_COLOR') == '' && os.isatty(1)
+}
+
+fn colorize(text string, color string) string {
+    if color == '' || !should_use_color() {
+        return text
+    }
+    return '${color}${text}${ansi_reset}'
+}
+
 fn run_compile_tasks(tasks []CompileTask, build_config config.BuildConfig) ![]string {
     mut object_files := []string{}
     if tasks.len == 0 {
@@ -165,14 +184,14 @@ pub fn build(mut build_config config.BuildConfig) ! {
             }
         }
 
-        println('Build completed successfully!')
+        println(colorize('Build completed successfully!', ansi_green))
         return
     }
 
     // Execute build and show full error output if something fails
     run_build(mut build_config) or {
         // Print error message to help debugging
-        println('Build failed: ${err}')
+        println(colorize('Build failed: ${err}', ansi_red))
         return err
     }
 }
@@ -245,7 +264,7 @@ fn build_from_directives(mut build_config config.BuildConfig, mut shared_libs_bu
 
         if source_file == '' {
             if build_config.verbose {
-                println('Warning: Source file not found for unit ${unit_name}')
+                println(colorize('Warning: Source file not found for unit ${unit_name}', ansi_yellow))
             }
             continue
         }
@@ -345,7 +364,7 @@ fn build_unit_recursive(unit_name string, dep_graph map[string]config.BuildDirec
             lib_name := 'lib/${dep_unit}'
             if lib_name !in shared_libs_built {
                 if build_config.verbose {
-                    println('Warning: Dependency ${dep_unit} not found for ${unit_name}')
+                    println(colorize('Warning: Dependency ${dep_unit} not found for ${unit_name}', ansi_yellow))
                 }
             }
         }
@@ -421,7 +440,7 @@ pub fn clean(build_config config.BuildConfig) {
     // Remove build directory
     if os.is_dir(build_config.build_dir) {
         os.rmdir_all(build_config.build_dir) or {
-            println('Warning: Failed to remove ${build_config.build_dir}: ${err}')
+            println(colorize('Warning: Failed to remove ${build_config.build_dir}: ${err}', ansi_yellow))
         }
         println('Removed ${build_config.build_dir}')
     }
@@ -432,7 +451,7 @@ pub fn clean(build_config config.BuildConfig) {
         full_dir := os.join_path(build_config.bin_dir, dir)
         if os.is_dir(full_dir) {
             os.rmdir_all(full_dir) or {
-                println('Warning: Failed to remove ${full_dir}: ${err}')
+                println(colorize('Warning: Failed to remove ${full_dir}: ${err}', ansi_yellow))
             }
             println('Removed ${full_dir}')
         }
@@ -442,7 +461,7 @@ pub fn clean(build_config config.BuildConfig) {
     main_exe := os.join_path(build_config.bin_dir, build_config.project_name)
     if os.is_file(main_exe) {
         os.rm(main_exe) or {
-            println('Warning: Failed to remove ${main_exe}: ${err}')
+            println(colorize('Warning: Failed to remove ${main_exe}: ${err}', ansi_yellow))
         }
         println('Removed ${main_exe}')
     }
@@ -470,7 +489,7 @@ fn build_shared_library(mut lib_config config.SharedLibConfig, build_config conf
     for src_file in lib_config.sources {
         if !os.is_file(src_file) {
             if build_config.verbose {
-                println('Warning: Source file not found: ${src_file}')
+                println(colorize('Warning: Source file not found: ${src_file}', ansi_yellow))
             }
             continue
         }
@@ -547,7 +566,7 @@ fn build_tool(mut tool_config config.ToolConfig, build_config config.BuildConfig
     for src_file in tool_config.sources {
         if !os.is_file(src_file) {
             if build_config.verbose {
-                println('Warning: Source file not found: ${src_file}')
+                println(colorize('Warning: Source file not found: ${src_file}', ansi_yellow))
             }
             continue
         }
@@ -628,8 +647,8 @@ fn compile_file(source_file string, object_file string, build_config config.Buil
     res := os.execute(cmd)
     if res.exit_code != 0 {
         // Print compile command and raw output to aid debugging
-        println('Compile command: ${cmd}')
-        println('Compiler output:\n${res.output}')
+        println(colorize('Compile command: ${cmd}', ansi_cyan))
+        println(colorize('Compiler output:\n${res.output}', ansi_red))
         return error('Compilation failed with exit code ${res.exit_code}: ${res.output}')
     }
     
@@ -650,9 +669,9 @@ fn link_shared_library(object_files []string, library_name string, output_path s
     res := os.execute(cmd)
     if res.exit_code != 0 {
         // Always print the linker command and its raw output to aid debugging
-        println('Linker command: ${cmd}')
+        println(colorize('Linker command: ${cmd}', ansi_cyan))
         // print raw output (may contain stdout and stderr merged by os.execute)
-        println('Linker output:\n${res.output}')
+        println(colorize('Linker output:\n${res.output}', ansi_red))
         return error('Shared library linking failed with exit code ${res.exit_code}: ${res.output}')
     }
 }
@@ -667,8 +686,8 @@ fn link_tool(object_files []string, executable string, build_config config.Build
     res := os.execute(cmd)
     if res.exit_code != 0 {
         // Always print the linker command and its raw output to aid debugging
-        println('Linker command: ${cmd}')
-        println('Linker output:\n${res.output}')
+        println(colorize('Linker command: ${cmd}', ansi_cyan))
+        println(colorize('Linker output:\n${res.output}', ansi_red))
         return error('Tool linking failed with exit code ${res.exit_code}: ${res.output}')
     }
 }
