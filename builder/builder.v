@@ -37,16 +37,14 @@ struct CompileResult {
     err string
 }
 
-const (
-    ansi_reset = '\x1b[0m'
-    ansi_red = '\x1b[31m'
-    ansi_green = '\x1b[32m'
-    ansi_yellow = '\x1b[33m'
-    ansi_cyan = '\x1b[36m'
-)
+const ansi_reset = '\x1b[0m'
+const ansi_red = '\x1b[31m'
+const ansi_green = '\x1b[32m'
+const ansi_yellow = '\x1b[33m'
+const ansi_cyan = '\x1b[36m'
 
 fn should_use_color() bool {
-    return os.getenv('NO_COLOR') == '' && os.isatty(1)
+    return os.getenv('NO_COLOR') == '' && os.is_atty(1) != 0
 }
 
 fn colorize(text string, color string) string {
@@ -209,7 +207,7 @@ fn build_from_directives(mut build_config config.BuildConfig, mut shared_libs_bu
     }
     
     // Topological sort to determine build order
-    for unit_name, directive in dep_graph {
+    for unit_name, _ in dep_graph {
         if unit_name in built_units {
             continue
         }
