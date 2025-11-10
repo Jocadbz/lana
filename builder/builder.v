@@ -4,6 +4,7 @@ import os
 import config
 import deps
 import runtime
+import time
 
 // BuildTarget represents a build target (shared lib or tool)
 pub enum BuildTarget {
@@ -125,6 +126,7 @@ fn run_compile_tasks(tasks []CompileTask, build_config config.BuildConfig) ![]st
 
 pub fn build(mut build_config config.BuildConfig) ! {
     // Run build flow and ensure that if any error occurs we print its message
+    start_time := time.now()
     println('Building ${build_config.project_name}...')
 
     run_build := fn (mut build_config config.BuildConfig) ! {
@@ -182,16 +184,21 @@ pub fn build(mut build_config config.BuildConfig) ! {
             }
         }
 
-        println(colorize('Build completed successfully!', ansi_green))
         return
     }
 
     // Execute build and show full error output if something fails
     run_build(mut build_config) or {
         // Print error message to help debugging
+        elapsed := time.since(start_time)
         println(colorize('Build failed: ${err}', ansi_red))
+        println('Build time: ${elapsed.seconds():.2f}s')
         return err
     }
+    
+    elapsed := time.since(start_time)
+    println(colorize('Build completed successfully!', ansi_green))
+    println('Build time: ${elapsed.seconds():.2f}s')
 }
 
 // Build targets based on build directives from source files
