@@ -38,11 +38,39 @@ struct CompileResult {
     err string
 }
 
+struct BuildNode {
+    id string
+    name string
+    target BuildTarget
+    raw_dependencies []string
+mut:
+    dependencies []string
+    shared_lib_idx int = -1
+    tool_idx int = -1
+    is_directive bool
+    directive config.BuildDirective
+    output_path string
+}
+
+struct BuildGraph {
+    nodes []BuildNode
+    node_index map[string]int
+    order []int
+    unresolved map[string][]string
+}
+
+struct DirectiveBuildContext {
+    source string
+    object string
+    target_config config.TargetConfig
+}
+
 const ansi_reset = '\x1b[0m'
 const ansi_red = '\x1b[31m'
 const ansi_green = '\x1b[32m'
 const ansi_yellow = '\x1b[33m'
 const ansi_cyan = '\x1b[36m'
+const skip_directive_err = 'skip_directive'
 
 fn should_use_color() bool {
     return os.getenv('NO_COLOR') == '' && os.is_atty(1) != 0
@@ -53,6 +81,89 @@ fn colorize(text string, color string) string {
         return text
     }
     return '${color}${text}${ansi_reset}'
+}
+
+fn register_alias(mut alias_map map[string]string, alias string, id string) {
+    trimmed := alias.trim_space()
+    if trimmed == '' {
+        return
+    }
+    if trimmed in alias_map {
+        return
+    }
+    alias_map[trimmed] = id
+}
+
+fn resolve_dependency(alias_map map[string]string, dep string) string {
+    trimmed := dep.trim_space()
+    if trimmed == '' {
+        return ''
+    }
+    mut candidates := []string{}
+    candidates << trimmed
+    if trimmed.ends_with('.so') && trimmed.len > 3 {
+        base := trimmed[..trimmed.len - 3]
+        candidates << base
+        if base.starts_with('lib/') && base.len > 4 {
+            candidates << base[4..]
+        }
+    }
+    if trimmed.starts_with('lib/') && trimmed.len > 4 {
+        candidates << trimmed[4..]
+    }
+    if trimmed.contains('/') {
+        parts := trimmed.split('/')
+        if parts.len > 0 {
+            candidates << parts[parts.len - 1]
+        }
+    }
+    for candidate in candidates {
+        if candidate in alias_map {
+            return alias_map[candidate]
+        }
+    }
+    return ''
+}
+
+fn topo_sort_nodes(nodes []BuildNode, node_index map[string]int) ![]int {
+    mut indegree := []int{len: nodes.len, init: 0}
+    mut adjacency := [][]int{len: nodes.len}
+    for idx, node in nodes {
+        for dep_id in node.dependencies {
+            dep_idx := node_index[dep_id] or {
+                return error('Unknown dependency ${dep_id} referenced by node ${node.id}')
+            }
+            adjacency[dep_idx] << idx
+            indegree[idx] += 1
+        }
+    }
+
+    mut queue := []int{}
+    for idx, deg in indegree {
+        if deg == 0 {
+            queue << idx
+        }
+    }
+
+    mut order := []int{}
+    mut head := 0
+    for head < queue.len {
+        current := queue[head]
+        head += 1
+        order << current
+        for neighbor in adjacency[current] {
+            indegree[neighbor] -= 1
+            if indegree[neighbor] == 0 {
+                queue << neighbor
+            }
+        }
+    }
+
+    if order.len != nodes.len {
+        return error('Build graph contains a cycle or unresolved dependency')
+    }
+
+    return order
 }
 
 fn run_compile_tasks(tasks []CompileTask, build_config config.BuildConfig) ![]string {
@@ -124,6 +235,327 @@ fn run_compile_tasks(tasks []CompileTask, build_config config.BuildConfig) ![]st
     return object_files
 }
 
+fn plan_build_graph(build_config &config.BuildConfig) !BuildGraph {
+    mut nodes := []BuildNode{}
+    mut alias_map := map[string]string{}
+
+    for idx, lib_config in build_config.shared_libs {
+        if lib_config.sources.len == 0 {
+            if build_config.debug || build_config.verbose || lib_config.debug || lib_config.verbose {
+                println('Skipping empty shared library: ${lib_config.name}')
+            }
+            continue
+        }
+        node_id := 'shared:${lib_config.name}'
+        node := BuildNode{
+            id: node_id
+            name: lib_config.name
+            target: BuildTarget.shared_lib
+            raw_dependencies: lib_config.libraries.clone()
+            shared_lib_idx: idx
+        }
+        nodes << node
+        register_alias(mut alias_map, lib_config.name, node_id)
+        register_alias(mut alias_map, 'lib/${lib_config.name}', node_id)
+        register_alias(mut alias_map, '${lib_config.name}.so', node_id)
+        register_alias(mut alias_map, 'lib/${lib_config.name}.so', node_id)
+    }
+
+    for directive in build_config.build_directives {
+        node_id := 'directive:${directive.unit_name}'
+        node := BuildNode{
+            id: node_id
+            name: directive.unit_name
+            target: if directive.is_shared { BuildTarget.shared_lib } else { BuildTarget.tool }
+            raw_dependencies: directive.depends_units.clone()
+            is_directive: true
+            directive: directive
+            output_path: directive.output_path
+        }
+        nodes << node
+        register_alias(mut alias_map, directive.unit_name, node_id)
+        parts := directive.unit_name.split('/')
+        if parts.len > 0 {
+            base := parts[parts.len - 1]
+            register_alias(mut alias_map, base, node_id)
+            if directive.is_shared {
+                register_alias(mut alias_map, '${base}.so', node_id)
+            }
+        }
+        if directive.output_path != '' {
+            register_alias(mut alias_map, directive.output_path, node_id)
+        }
+    }
+
+    for idx, tool_config in build_config.tools {
+        if tool_config.sources.len == 0 {
+            if build_config.debug || build_config.verbose || tool_config.debug || tool_config.verbose {
+                println('Skipping empty tool: ${tool_config.name}')
+            }
+            continue
+        }
+        node_id := 'tool:${tool_config.name}'
+        node := BuildNode{
+            id: node_id
+            name: tool_config.name
+            target: BuildTarget.tool
+            raw_dependencies: tool_config.libraries.clone()
+            tool_idx: idx
+        }
+        nodes << node
+        register_alias(mut alias_map, tool_config.name, node_id)
+        register_alias(mut alias_map, 'tools/${tool_config.name}', node_id)
+    }
+
+    mut node_index := map[string]int{}
+    for idx, node in nodes {
+        if node.id in node_index {
+            return error('Duplicate node id detected in build graph: ${node.id}')
+        }
+        node_index[node.id] = idx
+    }
+
+    mut unresolved := map[string][]string{}
+    for idx in 0 .. nodes.len {
+        mut resolved := []string{}
+        mut missing := []string{}
+        for dep in nodes[idx].raw_dependencies {
+            dep_id := resolve_dependency(alias_map, dep)
+            if dep_id == '' {
+                missing << dep
+                continue
+            }
+            if dep_id !in resolved {
+                resolved << dep_id
+            }
+        }
+        nodes[idx].dependencies = resolved
+        if missing.len > 0 {
+            unresolved[nodes[idx].id] = missing
+        }
+    }
+
+    order := if nodes.len > 0 { topo_sort_nodes(nodes, node_index)! } else { []int{} }
+
+    return BuildGraph{
+        nodes: nodes
+        node_index: node_index
+        order: order
+        unresolved: unresolved
+    }
+}
+
+fn execute_build_graph(mut build_config config.BuildConfig, graph BuildGraph) ! {
+    for node_idx in graph.order {
+        node := graph.nodes[node_idx]
+        if node.id in graph.unresolved && build_config.verbose {
+            missing := graph.unresolved[node.id]
+            println(colorize('Warning: Unresolved dependencies for ${node.name}: ${missing.join(", ")}', ansi_yellow))
+        }
+
+        if node.is_directive && (build_config.debug || build_config.verbose) {
+            println('Building unit: ${node.name}')
+        }
+
+        match node.target {
+            .shared_lib {
+                if node.is_directive {
+                    build_directive_shared(node.directive, build_config) or {
+                        return error('Failed to build shared directive ${node.name}: ${err}')
+                    }
+                } else if node.shared_lib_idx >= 0 {
+                    mut lib_config := &build_config.shared_libs[node.shared_lib_idx]
+                    if build_config.debug || build_config.verbose || lib_config.debug || lib_config.verbose {
+                        println('Building shared library: ${lib_config.name}')
+                    }
+                    build_shared_library(mut lib_config, build_config) or {
+                        return error('Failed to build shared library ${lib_config.name}: ${err}')
+                    }
+                    if build_config.verbose {
+                        println('Built shared library: ${lib_config.name}')
+                    }
+                }
+            }
+            .tool {
+                if node.is_directive {
+                    build_directive_tool(node.directive, build_config) or {
+                        return error('Failed to build tool directive ${node.name}: ${err}')
+                    }
+                } else if node.tool_idx >= 0 {
+                    mut tool_config := &build_config.tools[node.tool_idx]
+                    if build_config.debug || build_config.verbose || tool_config.debug || tool_config.verbose {
+                        println('Building tool: ${tool_config.name}')
+                    }
+                    build_tool(mut tool_config, build_config) or {
+                        return error('Failed to build tool ${tool_config.name}: ${err}')
+                    }
+                    if build_config.verbose {
+                        println('Built tool: ${tool_config.name}')
+                    }
+                }
+            }
+        }
+    }
+}
+
+fn resolve_directive_source(directive config.BuildDirective, build_config config.BuildConfig) string {
+    extensions := ['.cpp', '.cc', '.cxx']
+    for ext in extensions {
+        candidate := os.join_path(build_config.src_dir, directive.unit_name + ext)
+        if os.is_file(candidate) {
+            return candidate
+        }
+    }
+
+    parts := directive.unit_name.split('/')
+    base := if parts.len > 0 { parts[parts.len - 1] } else { directive.unit_name }
+    for ext in extensions {
+        candidate := os.join_path(build_config.src_dir, base + ext)
+        if os.is_file(candidate) {
+            return candidate
+        }
+    }
+
+    return ''
+}
+
+fn prepare_directive_build(directive config.BuildDirective, build_config config.BuildConfig) !DirectiveBuildContext {
+    source_file := resolve_directive_source(directive, build_config)
+    if source_file == '' {
+        if build_config.verbose {
+            println(colorize('Warning: Source file not found for unit ${directive.unit_name}', ansi_yellow))
+        }
+        return error(skip_directive_err)
+    }
+
+    object_dir := os.join_path(build_config.build_dir, directive.unit_name)
+    os.mkdir_all(object_dir) or {
+        return error('Failed to create object directory: ${object_dir}')
+    }
+
+    obj_file := get_object_file(source_file, object_dir)
+    obj_path := os.dir(obj_file)
+    os.mkdir_all(obj_path) or {
+        return error('Failed to create object directory: ${obj_path}')
+    }
+
+    target_config := if directive.is_shared {
+        config.TargetConfig(config.SharedLibConfig{
+            name: directive.unit_name
+            sources: [source_file]
+            libraries: directive.link_libs
+            cflags: directive.cflags
+            ldflags: directive.ldflags
+            debug: build_config.debug
+            optimize: build_config.optimize
+            verbose: build_config.verbose
+        })
+    } else {
+        config.TargetConfig(config.ToolConfig{
+            name: directive.unit_name
+            sources: [source_file]
+            libraries: directive.link_libs
+            cflags: directive.cflags
+            ldflags: directive.ldflags
+            debug: build_config.debug
+            optimize: build_config.optimize
+            verbose: build_config.verbose
+        })
+    }
+
+    return DirectiveBuildContext{
+        source: source_file
+        object: obj_file
+        target_config: target_config
+    }
+}
+
+fn build_directive_shared(directive config.BuildDirective, build_config config.BuildConfig) ! {
+    ctx := prepare_directive_build(directive, build_config) or {
+        if err.msg() == skip_directive_err {
+            return
+        }
+        return error(err.msg())
+    }
+
+    if needs_recompile(ctx.source, ctx.object) {
+        if build_config.debug || build_config.verbose {
+            println('Compiling ${directive.unit_name}: ${ctx.source}...')
+        }
+        compile_file(ctx.source, ctx.object, build_config, ctx.target_config) or {
+            return error('Failed to compile ${ctx.source} for ${directive.unit_name}')
+        }
+    } else if build_config.verbose {
+        println('Using cached ${ctx.object} for ${directive.unit_name}')
+    }
+
+    lib_output_dir := os.join_path(build_config.bin_dir, 'lib')
+    os.mkdir_all(lib_output_dir) or {
+        return error('Failed to create shared lib output directory: ${lib_output_dir}')
+    }
+
+    if build_config.debug || build_config.verbose {
+        parts := directive.unit_name.split('/')
+        base := if parts.len > 0 { parts[parts.len - 1] } else { directive.unit_name }
+        println('Linking shared library: ${lib_output_dir}/${base}.so')
+    }
+
+    link_shared_library([ctx.object], directive.unit_name, lib_output_dir, build_config, config.SharedLibConfig{
+        name: directive.unit_name
+        libraries: directive.link_libs
+        debug: build_config.debug
+        optimize: build_config.optimize
+        verbose: build_config.verbose
+        ldflags: directive.ldflags
+    }) or {
+        return error('Failed to link shared library ${directive.unit_name}')
+    }
+
+    if build_config.verbose {
+        println('Successfully built unit: ${directive.unit_name}')
+    }
+}
+
+fn build_directive_tool(directive config.BuildDirective, build_config config.BuildConfig) ! {
+    ctx := prepare_directive_build(directive, build_config) or {
+        if err.msg() == skip_directive_err {
+            return
+        }
+        return error(err.msg())
+    }
+
+    if needs_recompile(ctx.source, ctx.object) {
+        if build_config.debug || build_config.verbose {
+            println('Compiling ${directive.unit_name}: ${ctx.source}...')
+        }
+        compile_file(ctx.source, ctx.object, build_config, ctx.target_config) or {
+            return error('Failed to compile ${ctx.source} for ${directive.unit_name}')
+        }
+    } else if build_config.verbose {
+        println('Using cached ${ctx.object} for ${directive.unit_name}')
+    }
+
+    executable := os.join_path(build_config.bin_dir, directive.output_path)
+    if build_config.debug || build_config.verbose {
+        println('Linking executable: ${executable}')
+    }
+
+    link_tool([ctx.object], executable, build_config, config.ToolConfig{
+        name: directive.unit_name
+        libraries: directive.link_libs
+        debug: build_config.debug
+        optimize: build_config.optimize
+        verbose: build_config.verbose
+        ldflags: directive.ldflags
+    }) or {
+        return error('Failed to link executable ${directive.unit_name}')
+    }
+
+    if build_config.verbose {
+        println('Successfully built unit: ${directive.unit_name}')
+    }
+}
+
 pub fn build(mut build_config config.BuildConfig) ! {
     // Run build flow and ensure that if any error occurs we print its message
     start_time := time.now()
@@ -138,51 +570,8 @@ pub fn build(mut build_config config.BuildConfig) ! {
 
         // Auto-discover sources if not specified
         auto_discover_sources(mut build_config)
-
-        // Build shared libraries first (from config)
-        mut shared_libs_built := []string{}
-        for mut lib_config in build_config.shared_libs {
-            if lib_config.sources.len == 0 {
-                if build_config.debug || build_config.verbose || lib_config.debug || lib_config.verbose {
-                    println('Skipping empty shared library: ${lib_config.name}')
-                }
-                continue
-            }
-
-            if build_config.debug || build_config.verbose || lib_config.debug || lib_config.verbose {
-                println('Building shared library: ${lib_config.name}')
-            }
-            build_shared_library(mut lib_config, build_config) or {
-                return error('Failed to build shared library ${lib_config.name}: ${err}')
-            }
-            shared_libs_built << lib_config.name
-            if build_config.verbose {
-                println('Built shared library: ${lib_config.name}')
-            }
-        }
-
-        // Build targets from build directives
-        build_from_directives(mut build_config, mut shared_libs_built)!
-
-        // Build tools/executables from config
-        for mut tool_config in build_config.tools {
-            if tool_config.sources.len == 0 {
-                if build_config.debug || build_config.verbose || tool_config.debug || tool_config.verbose {
-                    println('Skipping empty tool: ${tool_config.name}')
-                }
-                continue
-            }
-
-            if build_config.debug || build_config.verbose || tool_config.debug || tool_config.verbose {
-                println('Building tool: ${tool_config.name}')
-            }
-            build_tool(mut tool_config, build_config) or {
-                return error('Failed to build tool ${tool_config.name}: ${err}')
-            }
-            if build_config.verbose {
-                println('Built tool: ${tool_config.name}')
-            }
-        }
+        graph := plan_build_graph(&build_config)!
+        execute_build_graph(mut build_config, graph)!
 
         return
     }
@@ -201,183 +590,6 @@ pub fn build(mut build_config config.BuildConfig) ! {
     println('Build time: ${elapsed.seconds():.2f}s')
 }
 
-// Build targets based on build directives from source files
-fn build_from_directives(mut build_config config.BuildConfig, mut shared_libs_built []string) ! {
-    // Build a dependency graph from directives
-    mut dep_graph := map[string]config.BuildDirective{}
-    mut build_order := []string{}
-    mut built_units := []string{}
-    
-    // Initialize graph with all directives
-    for directive in build_config.build_directives {
-        dep_graph[directive.unit_name] = directive
-    }
-    
-    // Topological sort to determine build order
-    for unit_name, _ in dep_graph {
-        if unit_name in built_units {
-            continue
-        }
-        build_unit_recursive(unit_name, dep_graph, mut build_order, mut built_units, mut build_config, shared_libs_built)!
-    }
-    
-    // Build units in determined order
-    for unit_name in build_order {
-        directive := dep_graph[unit_name]
-        
-        if build_config.debug || build_config.verbose {
-            println('Building unit: ${unit_name}')
-        }
-        
-        // Find source file for this unit
-        mut source_file := ''
-    // First try the full unit path (e.g., src/lib/file.cpp)
-    mut candidate := os.join_path(build_config.src_dir, directive.unit_name + '.cpp')
-        if os.is_file(candidate) {
-            source_file = candidate
-        } else {
-            candidate = os.join_path(build_config.src_dir, directive.unit_name + '.cc')
-            if os.is_file(candidate) {
-                source_file = candidate
-            } else {
-                candidate = os.join_path(build_config.src_dir, directive.unit_name + '.cxx')
-                if os.is_file(candidate) {
-                    source_file = candidate
-                }
-            }
-        }
-
-        // Fallback: try only the basename (e.g., src/file.cpp) for legacy layouts
-        if source_file == '' {
-            parts := directive.unit_name.split('/')
-            base := if parts.len > 0 { parts[parts.len - 1] } else { directive.unit_name }
-            candidate = os.join_path(build_config.src_dir, base + '.cpp')
-            if os.is_file(candidate) {
-                source_file = candidate
-            } else {
-                candidate = os.join_path(build_config.src_dir, base + '.cc')
-                if os.is_file(candidate) {
-                    source_file = candidate
-                } else {
-                    candidate = os.join_path(build_config.src_dir, base + '.cxx')
-                    if os.is_file(candidate) {
-                        source_file = candidate
-                    }
-                }
-            }
-        }
-
-        if source_file == '' {
-            if build_config.verbose {
-                println(colorize('Warning: Source file not found for unit ${unit_name}', ansi_yellow))
-            }
-            continue
-        }
-        
-        // Create object directory
-        object_dir := os.join_path(build_config.build_dir, directive.unit_name)
-        os.mkdir_all(object_dir) or { return error('Failed to create object directory: ${object_dir}') }
-        
-        obj_file := get_object_file(source_file, object_dir)
-        
-        // Compile source file
-        if needs_recompile(source_file, obj_file) {
-            if build_config.debug || build_config.verbose {
-                println('Compiling ${unit_name}: ${source_file}...')
-            }
-            target_config := config.TargetConfig(config.ToolConfig{
-                name: unit_name
-                sources: [source_file]
-                debug: build_config.debug
-                optimize: build_config.optimize
-                verbose: build_config.verbose
-                cflags: directive.cflags
-                ldflags: directive.ldflags
-            })
-            compile_file(source_file, obj_file, build_config, target_config) or { 
-                return error('Failed to compile ${source_file} for ${unit_name}')
-            }
-        } else {
-            if build_config.verbose {
-                println('Using cached ${obj_file} for ${unit_name}')
-            }
-        }
-        
-        // Link executable or shared library
-        if directive.is_shared {
-            // Link shared library
-            // place shared libs directly under bin/lib (not nested by unit name)
-            lib_output_dir := os.join_path(build_config.bin_dir, 'lib')
-            // ensure output directory exists
-            os.mkdir_all(lib_output_dir) or { return error('Failed to create shared lib output directory: ${lib_output_dir}') }
-            if build_config.debug || build_config.verbose {
-                println('Linking shared library: ${lib_output_dir}/${directive.unit_name.split('/').last()}.so')
-            }
-            if build_config.verbose {
-                // show contents of lib dir for debugging
-                files := os.ls(lib_output_dir) or { []string{} }
-                println('Contents of ${lib_output_dir}: ${files}')
-            }
-            link_shared_library([obj_file], directive.unit_name, lib_output_dir, build_config, config.SharedLibConfig{
-                name: directive.unit_name
-                libraries: directive.link_libs
-                debug: build_config.debug
-                optimize: build_config.optimize
-                verbose: build_config.verbose
-                ldflags: directive.ldflags
-            }) or { 
-                return error('Failed to link shared library ${unit_name}')
-            }
-            shared_libs_built << directive.unit_name
-        } else {
-            // Link executable
-            executable := os.join_path(build_config.bin_dir, directive.output_path)
-            if build_config.debug || build_config.verbose {
-                println('Linking executable: ${executable}')
-            }
-            link_tool([obj_file], executable, build_config, config.ToolConfig{
-                name: directive.unit_name
-                libraries: directive.link_libs
-                debug: build_config.debug
-                optimize: build_config.optimize
-                verbose: build_config.verbose
-                ldflags: directive.ldflags
-            }) or { 
-                return error('Failed to link executable ${unit_name}')
-            }
-        }
-        
-        if build_config.verbose {
-            println('Successfully built unit: ${unit_name}')
-        }
-    }
-}
-
-// Recursively build unit and its dependencies
-fn build_unit_recursive(unit_name string, dep_graph map[string]config.BuildDirective, mut build_order []string, mut built_units []string, mut build_config config.BuildConfig, shared_libs_built []string) ! {
-    if unit_name in built_units {
-        return
-    }
-    
-    // Build dependencies first
-    directive := dep_graph[unit_name]
-    for dep_unit in directive.depends_units {
-        if dep_unit in dep_graph {
-            build_unit_recursive(dep_unit, dep_graph, mut build_order, mut built_units, mut build_config, shared_libs_built)!
-        } else if !dep_unit.ends_with('.so') && !dep_unit.contains('.') {
-            // Look for library in shared_libs_built
-            lib_name := 'lib/${dep_unit}'
-            if lib_name !in shared_libs_built {
-                if build_config.verbose {
-                    println(colorize('Warning: Dependency ${dep_unit} not found for ${unit_name}', ansi_yellow))
-                }
-            }
-        }
-    }
-    
-    build_order << unit_name
-    built_units << unit_name
-}
 
 fn auto_discover_sources(mut build_config config.BuildConfig) {
     // Auto-discover shared library sources
