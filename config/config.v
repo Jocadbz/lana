@@ -65,6 +65,7 @@ __global:
     src_dir      string
     build_dir    string
     bin_dir      string
+    toolchain    string = 'gcc'
     include_dirs []string
     libraries    []string // global libraries
     cflags       []string // global CFLAGS
@@ -92,6 +93,7 @@ pub const default_config = BuildConfig{
     src_dir: 'src'
     build_dir: 'build'
     bin_dir: 'bin'
+    toolchain: 'gcc'
     include_dirs: []
     libraries: []
     cflags: []
@@ -251,6 +253,12 @@ pub fn parse_args() !BuildConfig {
                     i++
                 }
             }
+            '--toolchain' {
+                if i + 1 < os.args.len {
+                    build_config.toolchain = os.args[i + 1]
+                    i++
+                }
+            }
             '--config' {
                 if i + 1 < os.args.len { 
                     build_config = parse_config_file(os.args[i + 1])!
@@ -369,6 +377,7 @@ pub fn parse_config_file(filename string) !BuildConfig {
                         'build_dir' { build_config.build_dir = value }
                         'bin_dir' { build_config.bin_dir = value }
                         'compiler' { build_config.compiler = value }
+                        'toolchain' { build_config.toolchain = value }
                         'debug' { build_config.debug = value == 'true' }
                         'optimize' { build_config.optimize = value == 'true' }
                         'verbose' { build_config.verbose = value == 'true' }
@@ -632,6 +641,233 @@ pub fn get_target_config_values(target_config TargetConfig) (bool, bool, bool, b
     }
     
     return is_shared_lib, use_debug, use_optimize, use_verbose, target_includes, target_cflags
+}
+
+// Toolchain defines how compiler and linker commands are assembled for a target.
+pub interface Toolchain {
+    compile_command(source_file string, object_file string, build_config &BuildConfig, target_config TargetConfig) string
+    shared_link_command(object_files []string, library_name string, output_path string, build_config &BuildConfig, lib_config SharedLibConfig) string
+    tool_link_command(object_files []string, executable string, build_config &BuildConfig, tool_config ToolConfig) string
+    description() string
+}
+
+struct GCCToolchain {
+    compiler string
+}
+
+struct ClangToolchain {
+    compiler string
+}
+
+fn (tc GCCToolchain) description() string {
+    return 'gcc'
+}
+
+fn (tc ClangToolchain) description() string {
+    return 'clang'
+}
+
+fn (tc GCCToolchain) compile_command(source_file string, object_file string, build_config &BuildConfig, target_config TargetConfig) string {
+    return common_compile_command(tc.compiler, source_file, object_file, build_config, target_config)
+}
+
+fn (tc ClangToolchain) compile_command(source_file string, object_file string, build_config &BuildConfig, target_config TargetConfig) string {
+    return common_compile_command(tc.compiler, source_file, object_file, build_config, target_config)
+}
+
+fn (tc GCCToolchain) shared_link_command(object_files []string, library_name string, output_path string, build_config &BuildConfig, lib_config SharedLibConfig) string {
+    return common_shared_link_command(tc.compiler, object_files, library_name, output_path, build_config, lib_config)
+}
+
+fn (tc ClangToolchain) shared_link_command(object_files []string, library_name string, output_path string, build_config &BuildConfig, lib_config SharedLibConfig) string {
+    return common_shared_link_command(tc.compiler, object_files, library_name, output_path, build_config, lib_config)
+}
+
+fn (tc GCCToolchain) tool_link_command(object_files []string, executable string, build_config &BuildConfig, tool_config ToolConfig) string {
+    return common_tool_link_command(tc.compiler, object_files, executable, build_config, tool_config)
+}
+
+fn (tc ClangToolchain) tool_link_command(object_files []string, executable string, build_config &BuildConfig, tool_config ToolConfig) string {
+    return common_tool_link_command(tc.compiler, object_files, executable, build_config, tool_config)
+}
+
+fn common_compile_command(compiler string, source_file string, object_file string, build_config &BuildConfig, target_config TargetConfig) string {
+    mut binary := compiler
+    if binary.trim_space() == '' {
+        binary = 'g++'
+    }
+    mut cmd := '${binary} -c'
+
+    for include_dir in build_config.include_dirs {
+        cmd += ' -I${include_dir}'
+    }
+
+    for lib_path in build_config.lib_search_paths {
+        cmd += ' -L${lib_path}'
+    }
+
+    _, use_debug, use_optimize, _, target_includes, target_cflags := get_target_config_values(target_config)
+
+    for include_dir in target_includes {
+        if include_dir != '' {
+            cmd += ' -I${include_dir}'
+        }
+    }
+
+    if use_debug {
+        cmd += ' -g -O0'
+    } else if use_optimize {
+        cmd += ' -O3'
+    } else {
+        cmd += ' -O2'
+    }
+
+    is_shared_lib, _, _, _, _, _ := get_target_config_values(target_config)
+    if is_shared_lib {
+        cmd += ' -fPIC'
+    }
+
+    cmd += ' -Wall -Wextra'
+
+    for flag in build_config.cflags {
+        cmd += ' ${flag}'
+    }
+
+    for flag in target_cflags {
+        if flag != '' {
+            cmd += ' ${flag}'
+        }
+    }
+
+    cmd += ' ${source_file} -o ${object_file}'
+    return cmd
+}
+
+fn common_shared_link_command(compiler string, object_files []string, library_name string, output_path string, build_config &BuildConfig, lib_config SharedLibConfig) string {
+    mut binary := compiler
+    if binary.trim_space() == '' {
+        binary = 'g++'
+    }
+    mut cmd := '${binary} -shared'
+
+    cmd += ' -L${build_config.bin_dir}/lib'
+    for lib_path in build_config.lib_search_paths {
+        cmd += ' -L${lib_path}'
+    }
+
+    if lib_config.debug {
+        cmd += ' -g'
+    }
+
+    for obj_file in object_files {
+        cmd += ' ${obj_file}'
+    }
+
+    for library in build_config.libraries {
+        if library != '' {
+            cmd += ' -l${library}'
+        }
+    }
+
+    for library in lib_config.libraries {
+        if library != '' {
+            mut libfile := library
+            if libfile.starts_with('lib/') {
+                parts := libfile.split('/')
+                libfile = parts[parts.len - 1]
+            }
+            if libfile.ends_with('.so') {
+                libfile = libfile.replace('.so', '')
+            }
+            cmd += ' -l:${libfile}.so'
+        }
+    }
+
+    for flag in build_config.ldflags {
+        cmd += ' ${flag}'
+    }
+    for flag in lib_config.ldflags {
+        cmd += ' ${flag}'
+    }
+
+    parts := library_name.split('/')
+    base_name := if parts.len > 0 { parts[parts.len - 1] } else { library_name }
+    mut lib_name := base_name
+    $if windows {
+        lib_name += '.dll'
+    } $else {
+        lib_name += '.so'
+    }
+
+    cmd += ' -o ${output_path}/${lib_name}'
+    return cmd
+}
+
+fn common_tool_link_command(compiler string, object_files []string, executable string, build_config &BuildConfig, tool_config ToolConfig) string {
+    mut binary := compiler
+    if binary.trim_space() == '' {
+        binary = 'g++'
+    }
+    mut cmd := '${binary}'
+
+    cmd += ' -L${build_config.bin_dir}/lib'
+    for lib_path in build_config.lib_search_paths {
+        cmd += ' -L${lib_path}'
+    }
+
+    if tool_config.debug {
+        cmd += ' -g'
+    }
+
+    for obj_file in object_files {
+        cmd += ' ${obj_file}'
+    }
+
+    for library in build_config.libraries {
+        if library != '' {
+            cmd += ' -l${library}'
+        }
+    }
+
+    for library in tool_config.libraries {
+        if library != '' {
+            mut libfile := library
+            if libfile.starts_with('lib/') {
+                parts := libfile.split('/')
+                libfile = parts[parts.len - 1]
+            }
+            if libfile.ends_with('.so') {
+                libfile = libfile.replace('.so', '')
+            }
+            cmd += ' -l:${libfile}.so'
+        }
+    }
+
+    for flag in build_config.ldflags {
+        cmd += ' ${flag}'
+    }
+    for flag in tool_config.ldflags {
+        cmd += ' ${flag}'
+    }
+
+    cmd += ' -o ${executable}'
+    return cmd
+}
+
+pub fn get_toolchain(build_config BuildConfig) Toolchain {
+    mut normalized := build_config.toolchain.to_lower()
+    if normalized == '' {
+        normalized = 'gcc'
+    }
+    mut compiler := build_config.compiler
+    if compiler.trim_space() == '' {
+        compiler = if normalized == 'clang' { 'clang++' } else { 'g++' }
+    }
+
+    return match normalized {
+        'clang' { Toolchain(ClangToolchain{ compiler: compiler }) }
+        else { Toolchain(GCCToolchain{ compiler: compiler }) }
+    }
 }
 
 // Utility function to build compiler command for shared libraries and tools
