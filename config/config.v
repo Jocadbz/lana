@@ -87,6 +87,286 @@ __global:
     build_directives []BuildDirective
 }
 
+struct RawGlobalConfig {
+mut:
+    project_name string
+    src_dir string
+    build_dir string
+    bin_dir string
+    compiler string
+    toolchain string
+    debug_str string
+    optimize_str string
+    verbose_str string
+    parallel_str string
+    include_dirs []string
+    lib_search_paths []string
+    libraries []string
+    cflags []string
+    ldflags []string
+    dependencies_dir string
+}
+
+struct RawSharedLibConfig {
+mut:
+    name string
+    output_dir string
+    sources []string
+    libraries []string
+    include_dirs []string
+    cflags []string
+    ldflags []string
+    debug_str string
+    optimize_str string
+    verbose_str string
+}
+
+struct RawToolConfig {
+mut:
+    name string
+    output_dir string
+    sources []string
+    libraries []string
+    include_dirs []string
+    cflags []string
+    ldflags []string
+    debug_str string
+    optimize_str string
+    verbose_str string
+}
+
+struct RawDependencyConfig {
+mut:
+    name string
+    url string
+    archive string
+    checksum string
+    extract_to string
+    build_cmds []string
+}
+
+struct RawBuildConfig {
+mut:
+    global RawGlobalConfig
+    shared_libs []RawSharedLibConfig
+    tools []RawToolConfig
+    dependencies []RawDependencyConfig
+}
+
+fn parse_bool_str(value string) !bool {
+    lower := value.trim_space().to_lower()
+    return match lower {
+        'true', '1', 'yes', 'on' { true }
+        'false', '0', 'no', 'off' { false }
+        else { error('invalid boolean value: ${value}') }
+    }
+}
+
+fn parse_comma_list(value string) []string {
+    mut result := []string{}
+    if value.trim_space() == '' {
+        return result
+    }
+    for item in value.split(',') {
+        trimmed := item.trim_space()
+        if trimmed != '' {
+            result << trimmed
+        }
+    }
+    return result
+}
+
+fn parse_space_list(value string) []string {
+    mut result := []string{}
+    mut fields := value.split_any(' \t')
+    if fields.len == 0 && value.trim_space() != '' {
+        fields = [value.trim_space()]
+    }
+    for item in fields {
+        trimmed := item.trim_space()
+        if trimmed != '' {
+            result << trimmed
+        }
+    }
+    return result
+}
+
+fn merge_unique(mut target []string, additions []string) {
+    for item in additions {
+        trimmed := item.trim_space()
+        if trimmed == '' {
+            continue
+        }
+        if trimmed !in target {
+            target << trimmed
+        }
+    }
+}
+
+fn normalize_raw_config(raw RawBuildConfig, mut warnings []string) BuildConfig {
+    mut cfg := default_config
+    default_shared := SharedLibConfig{}
+    default_tool := ToolConfig{}
+
+    if raw.global.project_name != '' {
+        cfg.project_name = raw.global.project_name
+    }
+    if raw.global.src_dir != '' {
+        cfg.src_dir = raw.global.src_dir
+    }
+    if raw.global.build_dir != '' {
+        cfg.build_dir = raw.global.build_dir
+    }
+    if raw.global.bin_dir != '' {
+        cfg.bin_dir = raw.global.bin_dir
+    }
+    if raw.global.compiler != '' {
+        cfg.compiler = raw.global.compiler
+    }
+    if raw.global.toolchain != '' {
+        cfg.toolchain = raw.global.toolchain
+    }
+    if raw.global.dependencies_dir != '' {
+        cfg.dependencies_dir = raw.global.dependencies_dir
+    }
+
+    if raw.global.debug_str != '' {
+        cfg.debug = parse_bool_str(raw.global.debug_str) or {
+            warnings << 'Invalid boolean value for global.debug: ${raw.global.debug_str}'
+            cfg.debug
+        }
+    }
+    if raw.global.optimize_str != '' {
+        cfg.optimize = parse_bool_str(raw.global.optimize_str) or {
+            warnings << 'Invalid boolean value for global.optimize: ${raw.global.optimize_str}'
+            cfg.optimize
+        }
+    }
+    if raw.global.verbose_str != '' {
+        cfg.verbose = parse_bool_str(raw.global.verbose_str) or {
+            warnings << 'Invalid boolean value for global.verbose: ${raw.global.verbose_str}'
+            cfg.verbose
+        }
+    }
+    if raw.global.parallel_str != '' {
+        cfg.parallel_compilation = parse_bool_str(raw.global.parallel_str) or {
+            warnings << 'Invalid boolean value for global.parallel_compilation: ${raw.global.parallel_str}'
+            cfg.parallel_compilation
+        }
+    }
+
+    cfg.include_dirs << raw.global.include_dirs
+    cfg.lib_search_paths << raw.global.lib_search_paths
+    cfg.libraries << raw.global.libraries
+    cfg.cflags << raw.global.cflags
+    cfg.ldflags << raw.global.ldflags
+
+    for raw_lib in raw.shared_libs {
+        mut lib := SharedLibConfig{
+            name: raw_lib.name
+            output_dir: if raw_lib.output_dir != '' { raw_lib.output_dir } else { default_shared.output_dir }
+            sources: raw_lib.sources.clone()
+            libraries: raw_lib.libraries.clone()
+            debug: cfg.debug
+            optimize: cfg.optimize
+            verbose: cfg.verbose
+        }
+        lib.include_dirs = raw_lib.include_dirs.clone()
+        lib.cflags = raw_lib.cflags.clone()
+        lib.ldflags = raw_lib.ldflags.clone()
+
+        if raw_lib.debug_str != '' {
+            lib.debug = parse_bool_str(raw_lib.debug_str) or {
+                warnings << 'Invalid boolean value for shared_lib ${raw_lib.name} debug: ${raw_lib.debug_str}'
+                lib.debug
+            }
+        }
+        if raw_lib.optimize_str != '' {
+            lib.optimize = parse_bool_str(raw_lib.optimize_str) or {
+                warnings << 'Invalid boolean value for shared_lib ${raw_lib.name} optimize: ${raw_lib.optimize_str}'
+                lib.optimize
+            }
+        }
+        if raw_lib.verbose_str != '' {
+            lib.verbose = parse_bool_str(raw_lib.verbose_str) or {
+                warnings << 'Invalid boolean value for shared_lib ${raw_lib.name} verbose: ${raw_lib.verbose_str}'
+                lib.verbose
+            }
+        }
+
+        merge_unique(mut lib.include_dirs, cfg.include_dirs)
+        merge_unique(mut lib.cflags, cfg.cflags)
+        merge_unique(mut lib.ldflags, cfg.ldflags)
+
+        cfg.shared_libs << lib
+    }
+
+    for raw_tool in raw.tools {
+        mut tool := ToolConfig{
+            name: raw_tool.name
+            output_dir: if raw_tool.output_dir != '' { raw_tool.output_dir } else { default_tool.output_dir }
+            sources: raw_tool.sources.clone()
+            libraries: raw_tool.libraries.clone()
+            debug: cfg.debug
+            optimize: cfg.optimize
+            verbose: cfg.verbose
+        }
+        tool.include_dirs = raw_tool.include_dirs.clone()
+        tool.cflags = raw_tool.cflags.clone()
+        tool.ldflags = raw_tool.ldflags.clone()
+
+        if raw_tool.debug_str != '' {
+            tool.debug = parse_bool_str(raw_tool.debug_str) or {
+                warnings << 'Invalid boolean value for tool ${raw_tool.name} debug: ${raw_tool.debug_str}'
+                tool.debug
+            }
+        }
+        if raw_tool.optimize_str != '' {
+            tool.optimize = parse_bool_str(raw_tool.optimize_str) or {
+                warnings << 'Invalid boolean value for tool ${raw_tool.name} optimize: ${raw_tool.optimize_str}'
+                tool.optimize
+            }
+        }
+        if raw_tool.verbose_str != '' {
+            tool.verbose = parse_bool_str(raw_tool.verbose_str) or {
+                warnings << 'Invalid boolean value for tool ${raw_tool.name} verbose: ${raw_tool.verbose_str}'
+                tool.verbose
+            }
+        }
+
+        merge_unique(mut tool.include_dirs, cfg.include_dirs)
+        merge_unique(mut tool.cflags, cfg.cflags)
+        merge_unique(mut tool.ldflags, cfg.ldflags)
+
+        cfg.tools << tool
+    }
+
+    for raw_dep in raw.dependencies {
+        cfg.dependencies << Dependency{
+            name: raw_dep.name
+            url: raw_dep.url
+            archive: raw_dep.archive
+            checksum: raw_dep.checksum
+            extract_to: raw_dep.extract_to
+            build_cmds: raw_dep.build_cmds.clone()
+        }
+    }
+
+    for i in 0 .. cfg.shared_libs.len {
+        if cfg.shared_libs[i].name == '' {
+            cfg.shared_libs[i].name = 'lib${i}'
+        }
+    }
+
+    for i in 0 .. cfg.tools.len {
+        if cfg.tools[i].name == '' {
+            cfg.tools[i].name = 'tool${i}'
+        }
+    }
+
+    return cfg
+}
+
 // default config
 pub const default_config = BuildConfig{
     project_name: ''
@@ -339,276 +619,161 @@ pub fn parse_args() !BuildConfig {
 
 pub fn parse_config_file(filename string) !BuildConfig {
     content := os.read_file(filename) or { return error('Cannot read config file: ${filename}') }
-    mut build_config := default_config
-    lines := content.split_into_lines()
-    
-    mut current_section := ''
-    mut current_lib_index := 0
-    mut current_tool_index := 0
-    mut current_dep_index := 0
-    
-    for line in lines {
-        if line.starts_with('#') || line.trim_space() == '' { continue }
-        
-        if line.starts_with('[') && line.ends_with(']') {
-            // keep the brackets in current_section to match existing match arms
-            current_section = '[' + line[1..line.len - 1] + ']'
-            // Point indices to the next entry index for repeated sections
-            if current_section == '[shared_libs]' {
-                current_lib_index = build_config.shared_libs.len
-            } else if current_section == '[tools]' {
-                current_tool_index = build_config.tools.len
-            } else if current_section == '[dependencies]' {
-                current_dep_index = build_config.dependencies.len
+    mut raw := RawBuildConfig{}
+    mut warnings := []string{}
+
+    mut current_section := 'global'
+    mut current_shared_idx := -1
+    mut current_tool_idx := -1
+    mut current_dep_idx := -1
+
+    for line in content.split_into_lines() {
+        trimmed := line.trim_space()
+        if trimmed == '' || trimmed.starts_with('#') {
+            continue
+        }
+
+        if trimmed.starts_with('[') && trimmed.ends_with(']') {
+            section := trimmed[1..trimmed.len - 1].trim_space().to_lower()
+            match section {
+                'global' {
+                    current_section = 'global'
+                    current_shared_idx = -1
+                    current_tool_idx = -1
+                    current_dep_idx = -1
+                }
+                'shared_libs' {
+                    raw.shared_libs << RawSharedLibConfig{}
+                    current_shared_idx = raw.shared_libs.len - 1
+                    current_section = 'shared_libs'
+                }
+                'tools' {
+                    raw.tools << RawToolConfig{}
+                    current_tool_idx = raw.tools.len - 1
+                    current_section = 'tools'
+                }
+                'dependencies' {
+                    raw.dependencies << RawDependencyConfig{}
+                    current_dep_idx = raw.dependencies.len - 1
+                    current_section = 'dependencies'
+                }
+                else {
+                    warnings << 'Unknown config section: ${section}'
+                    current_section = 'global'
+                    current_shared_idx = -1
+                    current_tool_idx = -1
+                    current_dep_idx = -1
+                }
             }
             continue
         }
-        
-        parts := line.split('=')
-        if parts.len == 2 {
-            key := parts[0].trim_space()
-            value := parts[1].trim_space().trim('"\'')
-            
-            match current_section {
-                '' {
-                    match key {
-                        'project_name' { build_config.project_name = value }
-                        'src_dir' { build_config.src_dir = value }
-                        'build_dir' { build_config.build_dir = value }
-                        'bin_dir' { build_config.bin_dir = value }
-                        'compiler' { build_config.compiler = value }
-                        'toolchain' { build_config.toolchain = value }
-                        'debug' { build_config.debug = value == 'true' }
-                        'optimize' { build_config.optimize = value == 'true' }
-                        'verbose' { build_config.verbose = value == 'true' }
-                        'parallel_compilation' { build_config.parallel_compilation = value == 'true' }
-                        'include_dirs' { 
-                            dirs := value.split(',')
-                            for dir in dirs { build_config.include_dirs << dir.trim_space() }
-                        }
-                        'lib_search_paths' { 
-                            paths := value.split(',')
-                            for path in paths { build_config.lib_search_paths << path.trim_space() }
-                        }
-                        'libraries' { 
-                            libs := value.split(',')
-                            for lib in libs { build_config.libraries << lib.trim_space() }
-                        }
-                        'cflags' { 
-                            flags := value.split(' ')
-                            for flag in flags { build_config.cflags << flag.trim_space() }
-                        }
-                        'ldflags' { 
-                            flags := value.split(' ')
-                            for flag in flags { build_config.ldflags << flag.trim_space() }
-                        }
-                        'dependencies_dir' { build_config.dependencies_dir = value }
-                        else {}
-                    }
-                }
-                '[shared_libs]' {
-                    // Ensure we have a lib config to modify
-                    if current_lib_index >= build_config.shared_libs.len {
-                        build_config.shared_libs << SharedLibConfig{}
-                    }
-                    mut lib_config := &build_config.shared_libs[current_lib_index]
-                    
-                    match key {
-                        'name' { lib_config.name = value }
-                        'sources' {
-                            sources := value.split(',')
-                            for src in sources {
-                                lib_config.sources << src.trim_space()
-                            }
-                        }
-                        'libraries' {
-                            libs := value.split(',')
-                            for lib in libs {
-                                lib_config.libraries << lib.trim_space()
-                            }
-                        }
-                        'include_dirs' {
-                            dirs := value.split(',')
-                            for dir in dirs {
-                                lib_config.include_dirs << dir.trim_space()
-                            }
-                        }
-                        'cflags' {
-                            flags := value.split(' ')
-                            for flag in flags {
-                                lib_config.cflags << flag.trim_space()
-                            }
-                        }
-                        'ldflags' {
-                            flags := value.split(' ')
-                            for flag in flags {
-                                lib_config.ldflags << flag.trim_space()
-                            }
-                        }
-                        'debug' { lib_config.debug = value == 'true' }
-                        'optimize' { lib_config.optimize = value == 'true' }
-                        'verbose' { lib_config.verbose = value == 'true' }
-                        'output_dir' { lib_config.output_dir = value }
-                        else {
-                            if build_config.verbose {
-                                println('Warning: Unknown shared lib config key: ${key}')
-                            }
-                        }
-                    }
-                    // keys for this shared_lib section are populated into the same struct
-                }
-                '[tools]' {
-                    // Ensure we have a tool config to modify
-                    if current_tool_index >= build_config.tools.len {
-                        build_config.tools << ToolConfig{}
-                    }
-                    mut tool_config := &build_config.tools[current_tool_index]
-                    
-                    match key {
-                        'name' { tool_config.name = value }
-                        'sources' {
-                            sources := value.split(',')
-                            for src in sources {
-                                tool_config.sources << src.trim_space()
-                            }
-                        }
-                        'libraries' {
-                            libs := value.split(',')
-                            for lib in libs {
-                                tool_config.libraries << lib.trim_space()
-                            }
-                        }
-                        'include_dirs' {
-                            dirs := value.split(',')
-                            for dir in dirs {
-                                tool_config.include_dirs << dir.trim_space()
-                            }
-                        }
-                        'cflags' {
-                            flags := value.split(' ')
-                            for flag in flags {
-                                tool_config.cflags << flag.trim_space()
-                            }
-                        }
-                        'ldflags' {
-                            flags := value.split(' ')
-                            for flag in flags {
-                                tool_config.ldflags << flag.trim_space()
-                            }
-                        }
-                        'debug' { tool_config.debug = value == 'true' }
-                        'optimize' { tool_config.optimize = value == 'true' }
-                        'verbose' { tool_config.verbose = value == 'true' }
-                        'output_dir' { tool_config.output_dir = value }
-                        else {
-                            if build_config.verbose {
-                                println('Warning: Unknown tool config key: ${key}')
-                            }
-                        }
-                    }
-                    // keys for this tool section are populated into the same struct
-                }
-                '[dependencies]' {
-                    // Ensure we have a dependency entry to modify
-                    if current_dep_index >= build_config.dependencies.len {
-                        build_config.dependencies << Dependency{}
-                    }
-                    mut dep := &build_config.dependencies[current_dep_index]
 
-                    match key {
-                        'name' { dep.name = value }
-                        'url' { dep.url = value }
-                        'archive' { dep.archive = value }
-                        'checksum' { dep.checksum = value }
-                        'build_cmds' {
-                            cmds := value.split(';')
-                            for c in cmds {
-                                dep.build_cmds << c.trim_space()
-                            }
-                        }
-                        'extract_to' { dep.extract_to = value }
-                        else {
-                            if build_config.verbose {
-                                println('Warning: Unknown dependency config key: ${key}')
-                            }
-                        }
-                    }
-                    // keys for this dependency section are populated into the same struct
-                }
-                else {
-                    if build_config.verbose {
-                        println('Warning: Unknown config section: ${current_section}')
-                    }
+        eq_index := trimmed.index('=') or {
+            warnings << 'Invalid config line (missing =): ${trimmed}'
+            continue
+        }
+
+        key := trimmed[..eq_index].trim_space()
+        mut value := trimmed[eq_index + 1..].trim_space()
+        value = value.trim('"\'')
+
+        match current_section {
+            'global' {
+                match key {
+                    'project_name' { raw.global.project_name = value }
+                    'src_dir' { raw.global.src_dir = value }
+                    'build_dir' { raw.global.build_dir = value }
+                    'bin_dir' { raw.global.bin_dir = value }
+                    'compiler' { raw.global.compiler = value }
+                    'toolchain' { raw.global.toolchain = value }
+                    'debug' { raw.global.debug_str = value }
+                    'optimize' { raw.global.optimize_str = value }
+                    'verbose' { raw.global.verbose_str = value }
+                    'parallel_compilation' { raw.global.parallel_str = value }
+                    'include_dirs' { raw.global.include_dirs << parse_comma_list(value) }
+                    'lib_search_paths' { raw.global.lib_search_paths << parse_comma_list(value) }
+                    'libraries' { raw.global.libraries << parse_comma_list(value) }
+                    'cflags' { raw.global.cflags << parse_space_list(value) }
+                    'ldflags' { raw.global.ldflags << parse_space_list(value) }
+                    'dependencies_dir' { raw.global.dependencies_dir = value }
+                    else { warnings << 'Unknown global config key: ${key}' }
                 }
             }
+            'shared_libs' {
+                if current_shared_idx < 0 {
+                    raw.shared_libs << RawSharedLibConfig{}
+                    current_shared_idx = raw.shared_libs.len - 1
+                }
+                mut lib := &raw.shared_libs[current_shared_idx]
+                match key {
+                    'name' { lib.name = value }
+                    'sources' { lib.sources << parse_comma_list(value) }
+                    'libraries' { lib.libraries << parse_comma_list(value) }
+                    'include_dirs' { lib.include_dirs << parse_comma_list(value) }
+                    'cflags' { lib.cflags << parse_space_list(value) }
+                    'ldflags' { lib.ldflags << parse_space_list(value) }
+                    'debug' { lib.debug_str = value }
+                    'optimize' { lib.optimize_str = value }
+                    'verbose' { lib.verbose_str = value }
+                    'output_dir' { lib.output_dir = value }
+                    else { warnings << 'Unknown shared_libs key: ${key}' }
+                }
+            }
+            'tools' {
+                if current_tool_idx < 0 {
+                    raw.tools << RawToolConfig{}
+                    current_tool_idx = raw.tools.len - 1
+                }
+                mut tool := &raw.tools[current_tool_idx]
+                match key {
+                    'name' { tool.name = value }
+                    'sources' { tool.sources << parse_comma_list(value) }
+                    'libraries' { tool.libraries << parse_comma_list(value) }
+                    'include_dirs' { tool.include_dirs << parse_comma_list(value) }
+                    'cflags' { tool.cflags << parse_space_list(value) }
+                    'ldflags' { tool.ldflags << parse_space_list(value) }
+                    'debug' { tool.debug_str = value }
+                    'optimize' { tool.optimize_str = value }
+                    'verbose' { tool.verbose_str = value }
+                    'output_dir' { tool.output_dir = value }
+                    else { warnings << 'Unknown tools key: ${key}' }
+                }
+            }
+            'dependencies' {
+                if current_dep_idx < 0 {
+                    raw.dependencies << RawDependencyConfig{}
+                    current_dep_idx = raw.dependencies.len - 1
+                }
+                mut dep := &raw.dependencies[current_dep_idx]
+                match key {
+                    'name' { dep.name = value }
+                    'url' { dep.url = value }
+                    'archive' { dep.archive = value }
+                    'checksum' { dep.checksum = value }
+                    'extract_to' { dep.extract_to = value }
+                    'build_cmds' {
+                        for cmd in value.split(';') {
+                            trimmed_cmd := cmd.trim_space()
+                            if trimmed_cmd != '' {
+                                dep.build_cmds << trimmed_cmd
+                            }
+                        }
+                    }
+                    else { warnings << 'Unknown dependencies key: ${key}' }
+                }
+            }
+            else {
+                warnings << 'Key outside known section: ${key}'
+            }
         }
-    }
-    
-    // Set default values for shared libs and tools from global config if not explicitly set
-    for mut lib in build_config.shared_libs {
-        if lib.name == '' {
-            lib.name = 'lib${build_config.shared_libs.index(lib)}'
-        }
-        if !lib.debug { lib.debug = build_config.debug }
-        if !lib.optimize { lib.optimize = build_config.optimize }
-        if !lib.verbose { lib.verbose = build_config.verbose }
-    }
-    for mut tool in build_config.tools {
-        if tool.name == '' {
-            tool.name = 'tool${build_config.tools.index(tool)}'
-        }
-        if !tool.debug { tool.debug = build_config.debug }
-        if !tool.optimize { tool.optimize = build_config.optimize }
-        if !tool.verbose { tool.verbose = build_config.verbose }
     }
 
-    // Merge global flags and includes into individual shared libs and tools
-    for mut lib in build_config.shared_libs {
-        // merge include dirs
-        for inc in build_config.include_dirs {
-            if inc != '' && inc !in lib.include_dirs {
-                lib.include_dirs << inc
-            }
+    mut build_config := normalize_raw_config(raw, mut warnings)
+    if build_config.verbose {
+        for warning in warnings {
+            println('Warning: ${warning}')
         }
-        // merge cflags
-        for flag in build_config.cflags {
-            if flag != '' && flag !in lib.cflags {
-                lib.cflags << flag
-            }
-        }
-        // merge ldflags
-        for flag in build_config.ldflags {
-            if flag != '' && flag !in lib.ldflags {
-                lib.ldflags << flag
-            }
-        }
-        // Do NOT merge global libraries into shared lib 'libraries' here.
-        // Global libraries should be linked globally during linker command assembly, not as per-target shared lib dependencies.
     }
-
-    for mut tool in build_config.tools {
-        // merge include dirs
-        for inc in build_config.include_dirs {
-            if inc != '' && inc !in tool.include_dirs {
-                tool.include_dirs << inc
-            }
-        }
-        // merge cflags
-        for flag in build_config.cflags {
-            if flag != '' && flag !in tool.cflags {
-                tool.cflags << flag
-            }
-        }
-        // merge ldflags
-        for flag in build_config.ldflags {
-            if flag != '' && flag !in tool.ldflags {
-                tool.ldflags << flag
-            }
-        }
-        // Do NOT merge global libraries into tool 'libraries' here.
-        // Keep per-tool libraries strictly those declared for the tool; global libraries will be added at link time.
-    }
-    
     return build_config
 }
 
@@ -642,7 +807,6 @@ pub fn get_target_config_values(target_config TargetConfig) (bool, bool, bool, b
     
     return is_shared_lib, use_debug, use_optimize, use_verbose, target_includes, target_cflags
 }
-
 // Toolchain defines how compiler and linker commands are assembled for a target.
 pub interface Toolchain {
     compile_command(source_file string, object_file string, build_config &BuildConfig, target_config TargetConfig) string
