@@ -166,7 +166,7 @@ fn topo_sort_nodes(nodes []BuildNode, node_index map[string]int) ![]int {
     return order
 }
 
-fn run_compile_tasks(tasks []CompileTask, build_config config.BuildConfig) ![]string {
+fn run_compile_tasks(tasks []CompileTask, build_config config.BuildConfig, toolchain config.Toolchain) ![]string {
     mut object_files := []string{}
     if tasks.len == 0 {
         return object_files
@@ -175,7 +175,7 @@ fn run_compile_tasks(tasks []CompileTask, build_config config.BuildConfig) ![]st
     // If parallel compilation disabled, compile sequentially
     if !build_config.parallel_compilation {
         for task in tasks {
-            object := compile_file(task.source, task.obj, build_config, task.target_config) or { 
+            object := compile_file(task.source, task.obj, build_config, toolchain, task.target_config) or { 
                 return error('Failed to compile ${task.source}: ${err}')
             }
             object_files << object
@@ -197,20 +197,20 @@ fn run_compile_tasks(tasks []CompileTask, build_config config.BuildConfig) ![]st
 
     // Worker goroutines
     for _ in 0 .. workers {
-        go fn (ch chan CompileTask, res chan CompileResult, bc config.BuildConfig) {
+        go fn (ch chan CompileTask, res chan CompileResult, bc config.BuildConfig, tc config.Toolchain) {
             for {
                 t := <-ch
                 // sentinel task: empty source signals worker to exit
                 if t.source == '' {
                     break
                 }
-                object := compile_file(t.source, t.obj, bc, t.target_config) or {
+                object := compile_file(t.source, t.obj, bc, tc, t.target_config) or {
                     res <- CompileResult{obj: '', err: err.msg()}
                     continue
                 }
                 res <- CompileResult{obj: object, err: ''}
             }
-        }(tasks_ch, res_ch, build_config)
+        }(tasks_ch, res_ch, build_config, toolchain)
     }
 
     // Send tasks
@@ -345,7 +345,7 @@ fn plan_build_graph(build_config &config.BuildConfig) !BuildGraph {
     }
 }
 
-fn execute_build_graph(mut build_config config.BuildConfig, graph BuildGraph) ! {
+fn execute_build_graph(mut build_config config.BuildConfig, graph BuildGraph, toolchain config.Toolchain) ! {
     for node_idx in graph.order {
         node := graph.nodes[node_idx]
         if node.id in graph.unresolved && build_config.verbose {
@@ -360,7 +360,7 @@ fn execute_build_graph(mut build_config config.BuildConfig, graph BuildGraph) ! 
         match node.target {
             .shared_lib {
                 if node.is_directive {
-                    build_directive_shared(node.directive, build_config) or {
+                    build_directive_shared(node.directive, build_config, toolchain) or {
                         return error('Failed to build shared directive ${node.name}: ${err}')
                     }
                 } else if node.shared_lib_idx >= 0 {
@@ -368,7 +368,7 @@ fn execute_build_graph(mut build_config config.BuildConfig, graph BuildGraph) ! 
                     if build_config.debug || build_config.verbose || lib_config.debug || lib_config.verbose {
                         println('Building shared library: ${lib_config.name}')
                     }
-                    build_shared_library(mut lib_config, build_config) or {
+                    build_shared_library(mut lib_config, build_config, toolchain) or {
                         return error('Failed to build shared library ${lib_config.name}: ${err}')
                     }
                     if build_config.verbose {
@@ -378,7 +378,7 @@ fn execute_build_graph(mut build_config config.BuildConfig, graph BuildGraph) ! 
             }
             .tool {
                 if node.is_directive {
-                    build_directive_tool(node.directive, build_config) or {
+                    build_directive_tool(node.directive, build_config, toolchain) or {
                         return error('Failed to build tool directive ${node.name}: ${err}')
                     }
                 } else if node.tool_idx >= 0 {
@@ -386,7 +386,7 @@ fn execute_build_graph(mut build_config config.BuildConfig, graph BuildGraph) ! 
                     if build_config.debug || build_config.verbose || tool_config.debug || tool_config.verbose {
                         println('Building tool: ${tool_config.name}')
                     }
-                    build_tool(mut tool_config, build_config) or {
+                    build_tool(mut tool_config, build_config, toolchain) or {
                         return error('Failed to build tool ${tool_config.name}: ${err}')
                     }
                     if build_config.verbose {
@@ -470,7 +470,7 @@ fn prepare_directive_build(directive config.BuildDirective, build_config config.
     }
 }
 
-fn build_directive_shared(directive config.BuildDirective, build_config config.BuildConfig) ! {
+fn build_directive_shared(directive config.BuildDirective, build_config config.BuildConfig, toolchain config.Toolchain) ! {
     ctx := prepare_directive_build(directive, build_config) or {
         if err.msg() == skip_directive_err {
             return
@@ -482,7 +482,7 @@ fn build_directive_shared(directive config.BuildDirective, build_config config.B
         if build_config.debug || build_config.verbose {
             println('Compiling ${directive.unit_name}: ${ctx.source}...')
         }
-        compile_file(ctx.source, ctx.object, build_config, ctx.target_config) or {
+        compile_file(ctx.source, ctx.object, build_config, toolchain, ctx.target_config) or {
             return error('Failed to compile ${ctx.source} for ${directive.unit_name}')
         }
     } else if build_config.verbose {
@@ -500,7 +500,7 @@ fn build_directive_shared(directive config.BuildDirective, build_config config.B
         println('Linking shared library: ${lib_output_dir}/${base}.so')
     }
 
-    link_shared_library([ctx.object], directive.unit_name, lib_output_dir, build_config, config.SharedLibConfig{
+    link_shared_library([ctx.object], directive.unit_name, lib_output_dir, build_config, toolchain, config.SharedLibConfig{
         name: directive.unit_name
         libraries: directive.link_libs
         debug: build_config.debug
@@ -516,7 +516,7 @@ fn build_directive_shared(directive config.BuildDirective, build_config config.B
     }
 }
 
-fn build_directive_tool(directive config.BuildDirective, build_config config.BuildConfig) ! {
+fn build_directive_tool(directive config.BuildDirective, build_config config.BuildConfig, toolchain config.Toolchain) ! {
     ctx := prepare_directive_build(directive, build_config) or {
         if err.msg() == skip_directive_err {
             return
@@ -528,7 +528,7 @@ fn build_directive_tool(directive config.BuildDirective, build_config config.Bui
         if build_config.debug || build_config.verbose {
             println('Compiling ${directive.unit_name}: ${ctx.source}...')
         }
-        compile_file(ctx.source, ctx.object, build_config, ctx.target_config) or {
+        compile_file(ctx.source, ctx.object, build_config, toolchain, ctx.target_config) or {
             return error('Failed to compile ${ctx.source} for ${directive.unit_name}')
         }
     } else if build_config.verbose {
@@ -540,7 +540,7 @@ fn build_directive_tool(directive config.BuildDirective, build_config config.Bui
         println('Linking executable: ${executable}')
     }
 
-    link_tool([ctx.object], executable, build_config, config.ToolConfig{
+    link_tool([ctx.object], executable, build_config, toolchain, config.ToolConfig{
         name: directive.unit_name
         libraries: directive.link_libs
         debug: build_config.debug
@@ -570,8 +570,12 @@ pub fn build(mut build_config config.BuildConfig) ! {
 
         // Auto-discover sources if not specified
         auto_discover_sources(mut build_config)
+        toolchain := config.get_toolchain(build_config)
         graph := plan_build_graph(&build_config)!
-        execute_build_graph(mut build_config, graph)!
+        if build_config.verbose {
+            println('Using toolchain: ${toolchain.description()} (${build_config.compiler})')
+        }
+        execute_build_graph(mut build_config, graph, toolchain)!
 
         return
     }
@@ -686,7 +690,7 @@ pub fn clean(build_config config.BuildConfig) {
     println('Clean completed!')
 }
 
-fn build_shared_library(mut lib_config config.SharedLibConfig, build_config config.BuildConfig) ! {
+fn build_shared_library(mut lib_config config.SharedLibConfig, build_config config.BuildConfig, toolchain config.Toolchain) ! {
     if lib_config.sources.len == 0 {
         if build_config.debug || build_config.verbose || lib_config.debug || lib_config.verbose {
             println('No sources specified for shared library ${lib_config.name}, skipping')
@@ -724,7 +728,7 @@ fn build_shared_library(mut lib_config config.SharedLibConfig, build_config conf
             lib_target_config := config.TargetConfig(lib_config)
             // show compile command if verbose
             if lib_config.verbose || build_config.verbose {
-                cmd_preview := config.build_shared_compiler_command(src_file, obj_file, build_config, lib_target_config)
+                cmd_preview := toolchain.compile_command(src_file, obj_file, &build_config, lib_target_config)
                 println('Compile command (preview): ${cmd_preview}')
             }
             compile_tasks << CompileTask{source: src_file, obj: obj_file, target_config: lib_target_config}
@@ -738,7 +742,7 @@ fn build_shared_library(mut lib_config config.SharedLibConfig, build_config conf
 
     // Run compile tasks (parallel if enabled)
     if compile_tasks.len > 0 {
-        compiled := run_compile_tasks(compile_tasks, build_config) or { return err }
+        compiled := run_compile_tasks(compile_tasks, build_config, toolchain) or { return err }
         object_files << compiled
     }
     
@@ -754,7 +758,7 @@ fn build_shared_library(mut lib_config config.SharedLibConfig, build_config conf
     if build_config.debug || build_config.verbose || lib_config.debug || lib_config.verbose {
         println('Linking shared library: ${lib_output_dir}/${lib_config.name.split('/').last()}.so')
     }
-    link_shared_library(object_files, lib_config.name, lib_output_dir, build_config, lib_config) or { 
+    link_shared_library(object_files, lib_config.name, lib_output_dir, build_config, toolchain, lib_config) or { 
         return error('Failed to link shared library ${lib_config.name}')
     }
     
@@ -763,7 +767,7 @@ fn build_shared_library(mut lib_config config.SharedLibConfig, build_config conf
     }
 }
 
-fn build_tool(mut tool_config config.ToolConfig, build_config config.BuildConfig) ! {
+fn build_tool(mut tool_config config.ToolConfig, build_config config.BuildConfig, toolchain config.Toolchain) ! {
     if tool_config.sources.len == 0 {
         if build_config.debug || build_config.verbose || tool_config.debug || tool_config.verbose {
             println('No sources specified for tool ${tool_config.name}, skipping')
@@ -801,7 +805,7 @@ fn build_tool(mut tool_config config.ToolConfig, build_config config.BuildConfig
             tool_target_config := config.TargetConfig(tool_config)
             // show compile command if verbose
             if tool_config.verbose || build_config.verbose {
-                cmd_preview := config.build_shared_compiler_command(src_file, obj_file, build_config, tool_target_config)
+                cmd_preview := toolchain.compile_command(src_file, obj_file, &build_config, tool_target_config)
                 println('Compile command (preview): ${cmd_preview}')
             }
             compile_tasks << CompileTask{source: src_file, obj: obj_file, target_config: tool_target_config}
@@ -815,7 +819,7 @@ fn build_tool(mut tool_config config.ToolConfig, build_config config.BuildConfig
 
     // Run compile tasks (parallel if enabled)
     if compile_tasks.len > 0 {
-        compiled := run_compile_tasks(compile_tasks, build_config) or { return err }
+        compiled := run_compile_tasks(compile_tasks, build_config, toolchain) or { return err }
         object_files << compiled
     }
     
@@ -828,7 +832,7 @@ fn build_tool(mut tool_config config.ToolConfig, build_config config.BuildConfig
     if build_config.debug || build_config.verbose || tool_config.debug || tool_config.verbose {
         println('Linking tool: ${executable}')
     }
-    link_tool(object_files, executable, build_config, tool_config) or { 
+    link_tool(object_files, executable, build_config, toolchain, tool_config) or { 
         return error('Failed to link tool ${tool_config.name}')
     }
     
@@ -851,8 +855,8 @@ fn get_target_verbose(target_config config.TargetConfig) bool {
     return verbose
 }
 
-fn compile_file(source_file string, object_file string, build_config config.BuildConfig, target_config config.TargetConfig) !string {
-    cmd := config.build_shared_compiler_command(source_file, object_file, build_config, target_config)
+fn compile_file(source_file string, object_file string, build_config config.BuildConfig, toolchain config.Toolchain, target_config config.TargetConfig) !string {
+    cmd := toolchain.compile_command(source_file, object_file, &build_config, target_config)
 
     target_verbose := get_target_verbose(target_config)
 
@@ -876,8 +880,8 @@ fn compile_file(source_file string, object_file string, build_config config.Buil
     return object_file
 }
 
-fn link_shared_library(object_files []string, library_name string, output_path string, build_config config.BuildConfig, lib_config config.SharedLibConfig) ! {
-    cmd := config.build_shared_linker_command(object_files, library_name, output_path, build_config, lib_config)
+fn link_shared_library(object_files []string, library_name string, output_path string, build_config config.BuildConfig, toolchain config.Toolchain, lib_config config.SharedLibConfig) ! {
+    cmd := toolchain.shared_link_command(object_files, library_name, output_path, &build_config, lib_config)
     
     if lib_config.verbose {
         println('Shared lib link command: ${cmd}')
@@ -893,8 +897,8 @@ fn link_shared_library(object_files []string, library_name string, output_path s
     }
 }
 
-fn link_tool(object_files []string, executable string, build_config config.BuildConfig, tool_config config.ToolConfig) ! {
-    cmd := config.build_tool_linker_command(object_files, executable, build_config, tool_config)
+fn link_tool(object_files []string, executable string, build_config config.BuildConfig, toolchain config.Toolchain, tool_config config.ToolConfig) ! {
+    cmd := toolchain.tool_link_command(object_files, executable, &build_config, tool_config)
     
     if tool_config.verbose {
         println('Tool link command: ${cmd}')
