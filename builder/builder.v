@@ -59,6 +59,57 @@ struct BuildGraph {
     unresolved map[string][]string
 }
 
+pub struct GraphNodeSummary {
+pub:
+    id string
+    name string
+    target BuildTarget
+    dependencies []string
+    raw_dependencies []string
+    is_directive bool
+    output_path string
+}
+
+pub struct GraphPlanSummary {
+pub:
+    nodes []GraphNodeSummary
+    order []string
+    unresolved map[string][]string
+}
+
+pub fn preview_build_graph(build_config &config.BuildConfig) !GraphPlanSummary {
+    graph := plan_build_graph(build_config)!
+
+    mut nodes := []GraphNodeSummary{}
+    for node in graph.nodes {
+        nodes << GraphNodeSummary{
+            id: node.id
+            name: node.name
+            target: node.target
+            dependencies: node.dependencies.clone()
+            raw_dependencies: node.raw_dependencies.clone()
+            is_directive: node.is_directive
+            output_path: node.output_path
+        }
+    }
+
+    mut order := []string{}
+    for idx in graph.order {
+        order << graph.nodes[idx].id
+    }
+
+    mut unresolved := map[string][]string{}
+    for id, deps in graph.unresolved {
+        unresolved[id] = deps.clone()
+    }
+
+    return GraphPlanSummary{
+        nodes: nodes
+        order: order
+        unresolved: unresolved
+    }
+}
+
 struct DirectiveBuildContext {
     source string
     object string
@@ -651,6 +702,37 @@ fn auto_discover_sources(mut build_config config.BuildConfig) {
                     println('Auto-discovered ${all_sources.len} source files for main project')
                 }
             }
+        }
+    }
+
+    // Ensure the main project tool exists if it wasn't explicitly defined
+    // This handles the case where config.ini defines other tools but not the main project tool
+    mut main_tool_exists := false
+    for tool in build_config.tools {
+        if tool.name == build_config.project_name {
+            main_tool_exists = true
+            break
+        }
+    }
+
+    if !main_tool_exists {
+        // Look for src/<project_name>.cpp
+        // Really shit way to do it but meh, we'll figure this out soon enough.
+        main_src := os.join_path(build_config.src_dir, '${build_config.project_name}.cpp')
+        if os.is_file(main_src) {
+            if build_config.verbose {
+                println('Auto-discovered main project tool: ${build_config.project_name} from ${main_src}')
+            }
+            
+            new_tool := config.ToolConfig{
+                name: build_config.project_name
+                sources: [main_src]
+                debug: build_config.debug
+                optimize: build_config.optimize
+                verbose: build_config.verbose
+                libraries: [] // Will inherit global libs during link
+            }
+            build_config.tools << new_tool
         }
     }
 }

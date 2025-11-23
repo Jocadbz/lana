@@ -203,6 +203,30 @@ fn merge_unique(mut target []string, additions []string) {
     }
 }
 
+fn resolve_bool(base bool, override_str string, scope string, field string, mut warnings []string) bool {
+    if override_str.trim_space() == '' {
+        return base
+    }
+    return parse_bool_str(override_str) or {
+        warnings << 'Invalid boolean value for ${scope} ${field}: ${override_str}'
+        base
+    }
+}
+
+fn inherit_list(primary []string, inherited []string) []string {
+    mut merged := primary.clone()
+    merge_unique(mut merged, inherited)
+    return merged
+}
+
+fn scope_label(name string, kind string) string {
+    trimmed := name.trim_space()
+    if trimmed != '' {
+        return '${kind} ${trimmed}'
+    }
+    return kind
+}
+
 fn normalize_raw_config(raw RawBuildConfig, mut warnings []string) BuildConfig {
     mut cfg := default_config
     default_shared := SharedLibConfig{}
@@ -230,113 +254,49 @@ fn normalize_raw_config(raw RawBuildConfig, mut warnings []string) BuildConfig {
         cfg.dependencies_dir = raw.global.dependencies_dir
     }
 
-    if raw.global.debug_str != '' {
-        cfg.debug = parse_bool_str(raw.global.debug_str) or {
-            warnings << 'Invalid boolean value for global.debug: ${raw.global.debug_str}'
-            cfg.debug
-        }
-    }
-    if raw.global.optimize_str != '' {
-        cfg.optimize = parse_bool_str(raw.global.optimize_str) or {
-            warnings << 'Invalid boolean value for global.optimize: ${raw.global.optimize_str}'
-            cfg.optimize
-        }
-    }
-    if raw.global.verbose_str != '' {
-        cfg.verbose = parse_bool_str(raw.global.verbose_str) or {
-            warnings << 'Invalid boolean value for global.verbose: ${raw.global.verbose_str}'
-            cfg.verbose
-        }
-    }
-    if raw.global.parallel_str != '' {
-        cfg.parallel_compilation = parse_bool_str(raw.global.parallel_str) or {
-            warnings << 'Invalid boolean value for global.parallel_compilation: ${raw.global.parallel_str}'
-            cfg.parallel_compilation
-        }
-    }
+    cfg.debug = resolve_bool(cfg.debug, raw.global.debug_str, 'global', 'debug', mut warnings)
+    cfg.optimize = resolve_bool(cfg.optimize, raw.global.optimize_str, 'global', 'optimize', mut warnings)
+    cfg.verbose = resolve_bool(cfg.verbose, raw.global.verbose_str, 'global', 'verbose', mut warnings)
+    cfg.parallel_compilation = resolve_bool(cfg.parallel_compilation, raw.global.parallel_str, 'global', 'parallel_compilation', mut warnings)
 
-    cfg.include_dirs << raw.global.include_dirs
-    cfg.lib_search_paths << raw.global.lib_search_paths
-    cfg.libraries << raw.global.libraries
-    cfg.cflags << raw.global.cflags
-    cfg.ldflags << raw.global.ldflags
+    cfg.include_dirs = inherit_list(raw.global.include_dirs, cfg.include_dirs)
+    cfg.lib_search_paths = inherit_list(raw.global.lib_search_paths, cfg.lib_search_paths)
+    cfg.libraries = inherit_list(raw.global.libraries, cfg.libraries)
+    cfg.cflags = inherit_list(raw.global.cflags, cfg.cflags)
+    cfg.ldflags = inherit_list(raw.global.ldflags, cfg.ldflags)
 
     for raw_lib in raw.shared_libs {
+        scope := scope_label(raw_lib.name, 'shared_lib')
         mut lib := SharedLibConfig{
             name: raw_lib.name
             output_dir: if raw_lib.output_dir != '' { raw_lib.output_dir } else { default_shared.output_dir }
             sources: raw_lib.sources.clone()
             libraries: raw_lib.libraries.clone()
-            debug: cfg.debug
-            optimize: cfg.optimize
-            verbose: cfg.verbose
+            debug: resolve_bool(cfg.debug, raw_lib.debug_str, scope, 'debug', mut warnings)
+            optimize: resolve_bool(cfg.optimize, raw_lib.optimize_str, scope, 'optimize', mut warnings)
+            verbose: resolve_bool(cfg.verbose, raw_lib.verbose_str, scope, 'verbose', mut warnings)
         }
-        lib.include_dirs = raw_lib.include_dirs.clone()
-        lib.cflags = raw_lib.cflags.clone()
-        lib.ldflags = raw_lib.ldflags.clone()
-
-        if raw_lib.debug_str != '' {
-            lib.debug = parse_bool_str(raw_lib.debug_str) or {
-                warnings << 'Invalid boolean value for shared_lib ${raw_lib.name} debug: ${raw_lib.debug_str}'
-                lib.debug
-            }
-        }
-        if raw_lib.optimize_str != '' {
-            lib.optimize = parse_bool_str(raw_lib.optimize_str) or {
-                warnings << 'Invalid boolean value for shared_lib ${raw_lib.name} optimize: ${raw_lib.optimize_str}'
-                lib.optimize
-            }
-        }
-        if raw_lib.verbose_str != '' {
-            lib.verbose = parse_bool_str(raw_lib.verbose_str) or {
-                warnings << 'Invalid boolean value for shared_lib ${raw_lib.name} verbose: ${raw_lib.verbose_str}'
-                lib.verbose
-            }
-        }
-
-        merge_unique(mut lib.include_dirs, cfg.include_dirs)
-        merge_unique(mut lib.cflags, cfg.cflags)
-        merge_unique(mut lib.ldflags, cfg.ldflags)
+        lib.include_dirs = inherit_list(raw_lib.include_dirs, cfg.include_dirs)
+        lib.cflags = inherit_list(raw_lib.cflags, cfg.cflags)
+        lib.ldflags = inherit_list(raw_lib.ldflags, cfg.ldflags)
 
         cfg.shared_libs << lib
     }
 
     for raw_tool in raw.tools {
+        scope := scope_label(raw_tool.name, 'tool')
         mut tool := ToolConfig{
             name: raw_tool.name
             output_dir: if raw_tool.output_dir != '' { raw_tool.output_dir } else { default_tool.output_dir }
             sources: raw_tool.sources.clone()
             libraries: raw_tool.libraries.clone()
-            debug: cfg.debug
-            optimize: cfg.optimize
-            verbose: cfg.verbose
+            debug: resolve_bool(cfg.debug, raw_tool.debug_str, scope, 'debug', mut warnings)
+            optimize: resolve_bool(cfg.optimize, raw_tool.optimize_str, scope, 'optimize', mut warnings)
+            verbose: resolve_bool(cfg.verbose, raw_tool.verbose_str, scope, 'verbose', mut warnings)
         }
-        tool.include_dirs = raw_tool.include_dirs.clone()
-        tool.cflags = raw_tool.cflags.clone()
-        tool.ldflags = raw_tool.ldflags.clone()
-
-        if raw_tool.debug_str != '' {
-            tool.debug = parse_bool_str(raw_tool.debug_str) or {
-                warnings << 'Invalid boolean value for tool ${raw_tool.name} debug: ${raw_tool.debug_str}'
-                tool.debug
-            }
-        }
-        if raw_tool.optimize_str != '' {
-            tool.optimize = parse_bool_str(raw_tool.optimize_str) or {
-                warnings << 'Invalid boolean value for tool ${raw_tool.name} optimize: ${raw_tool.optimize_str}'
-                tool.optimize
-            }
-        }
-        if raw_tool.verbose_str != '' {
-            tool.verbose = parse_bool_str(raw_tool.verbose_str) or {
-                warnings << 'Invalid boolean value for tool ${raw_tool.name} verbose: ${raw_tool.verbose_str}'
-                tool.verbose
-            }
-        }
-
-        merge_unique(mut tool.include_dirs, cfg.include_dirs)
-        merge_unique(mut tool.cflags, cfg.cflags)
-        merge_unique(mut tool.ldflags, cfg.ldflags)
+        tool.include_dirs = inherit_list(raw_tool.include_dirs, cfg.include_dirs)
+        tool.cflags = inherit_list(raw_tool.cflags, cfg.cflags)
+        tool.ldflags = inherit_list(raw_tool.ldflags, cfg.ldflags)
 
         cfg.tools << tool
     }

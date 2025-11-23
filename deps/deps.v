@@ -23,31 +23,33 @@ pub fn extract_dependencies(source_file string) ![]string {
             in_string = false
             current_string_char = rune(0)
         } else if !in_string {
-            if c == `#` && i + 1 < content.len && content[i + 1] == `i` {
-                // Found #include
-                i += 7 // skip "#include"
+            if c == `#` && i + 8 <= content.len && content[i..].starts_with('#include') {
+                i += '#include'.len
                 for i < content.len && content[i].is_space() {
                     i++
                 }
-                
-                if i < content.len && (content[i] == `"` || content[i] == `<`) {
-                    mut quote_char := content[i]
+
+                if i < content.len && (content[i] == `"` || content[i] == `<` || content[i] == `'`) {
+                    opening := content[i]
+                    closing := match opening {
+                        `"` { `"` }
+                        `'` { `'` }
+                        `<` { `>` }
+                        else { opening }
+                    }
                     i++
                     mut include_path := []u8{}
-                    
-                    for i < content.len && content[i] != quote_char {
+
+                    for i < content.len && content[i] != closing {
                         include_path << content[i]
                         i++
                     }
-                    
+
                     if include_path.len > 0 {
                         include_name := include_path.bytestr()
                         if include_name.contains('/') || include_name.contains('\\') {
-                            // Relative path
                             dependencies << include_name
                         } else {
-                            // System include - we could search standard paths
-                            // but for now just add the name
                             dependencies << include_name
                         }
                     }
