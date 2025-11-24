@@ -1,6 +1,7 @@
 module config
 
 import os
+import util
 
 // BuildDirective represents a single build directive found in source files
 pub struct BuildDirective {
@@ -351,7 +352,7 @@ pub fn (mut build_config BuildConfig) parse_build_directives() ! {
     mut directives := []BuildDirective{}
     
     // Find all source files in src directory
-    src_files := find_source_files(build_config.src_dir) or { 
+    src_files := util.find_source_files(build_config.src_dir) or { 
         if build_config.verbose {
             println('No source files found in ${build_config.src_dir}')
         }
@@ -1030,28 +1031,7 @@ pub fn build_compiler_command(source_file string, object_file string, build_conf
     return cmd
 }
 
-// Utility function to find source files
+// Utility function to find source files (delegates to util module for backward compatibility)
 pub fn find_source_files(dir string) ![]string {
-    mut files := []string{}
-    
-    if !os.is_dir(dir) {
-        return error('Source directory does not exist: ${dir}')
-    }
-    
-    items := os.ls(dir) or { return error('Failed to list directory: ${dir}') }
-    
-    for item in items {
-        full_path := os.join_path(dir, item)
-        if os.is_file(full_path) {
-            if item.ends_with('.cpp') || item.ends_with('.cc') || item.ends_with('.cxx') {
-                files << full_path
-            }
-        } else if os.is_dir(full_path) {
-            // Recursively search subdirectories
-            sub_files := find_source_files(full_path)!
-            files << sub_files
-        }
-    }
-    
-    return files
+    return util.find_source_files(dir)
 }

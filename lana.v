@@ -7,10 +7,7 @@ import runner
 import initializer
 import deps
 import help
-
-// For runner compatibility
-const bin_dir = 'bin'
-const tools_dir = 'bin/tools'
+import util
 
 fn main() {
 	mut config_data := config.parse_args() or { config.default_config }
@@ -38,7 +35,11 @@ fn main() {
 			}
 
 			// Find and run the main executable (first tool or project_name)
-			main_executable := get_main_executable(config_data)
+			tools := config_data.tools.map(util.ToolInfo{
+				name: it.name
+				output_dir: it.output_dir
+			})
+			main_executable := util.get_main_executable(config_data.project_name, config_data.bin_dir, tools)
 			if main_executable != '' && os.is_file(main_executable) {
 				runner.run_executable(config_data)
 			} else {
@@ -58,22 +59,4 @@ fn main() {
 			help.show_help()
 		}
 	}
-}
-
-fn get_main_executable(build_config config.BuildConfig) string {
-	// First try to find a tool with the project name
-	for tool_config in build_config.tools {
-		if tool_config.name == build_config.project_name {
-			return os.join_path(tool_config.output_dir, tool_config.name)
-		}
-	}
-
-	// Then try the first tool
-	if build_config.tools.len > 0 {
-		tool_config := build_config.tools[0]
-		return os.join_path(tool_config.output_dir, tool_config.name)
-	}
-
-	// Fallback to old behavior
-	return os.join_path(build_config.bin_dir, build_config.project_name)
 }

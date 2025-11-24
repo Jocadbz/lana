@@ -5,6 +5,7 @@ import config
 import deps
 import runtime
 import time
+import util
 
 // BuildTarget represents a build target (shared lib or tool)
 pub enum BuildTarget {
@@ -653,7 +654,7 @@ fn auto_discover_sources(mut build_config config.BuildConfig) {
             // Look for sources in src/lib/<lib_name>/
             lib_src_dir := os.join_path('src', 'lib', lib_config.name)
             if os.is_dir(lib_src_dir) {
-                lib_sources := find_source_files(lib_src_dir) or { []string{} }
+            lib_sources := util.find_source_files(lib_src_dir) or { []string{} }
                 lib_config.sources = lib_sources
                 if build_config.verbose && lib_sources.len > 0 {
                     println('Auto-discovered ${lib_sources.len} source files for shared lib ${lib_config.name}')
@@ -668,7 +669,7 @@ fn auto_discover_sources(mut build_config config.BuildConfig) {
             // Look for sources in src/tools/<tool_name>/
             tool_src_dir := os.join_path('src', 'tools', tool_config.name)
             if os.is_dir(tool_src_dir) {
-                tool_sources := find_source_files(tool_src_dir) or { []string{} }
+                tool_sources := util.find_source_files(tool_src_dir) or { []string{} }
                 if tool_sources.len > 0 {
                     tool_config.sources = tool_sources
                 } else {
@@ -695,7 +696,7 @@ fn auto_discover_sources(mut build_config config.BuildConfig) {
     if build_config.tools.len > 0 && build_config.tools[0].sources.len == 0 {
         mut default_tool := &build_config.tools[0]
         if default_tool.name == build_config.project_name {
-            all_sources := find_source_files(build_config.src_dir) or { []string{} }
+            all_sources := util.find_source_files(build_config.src_dir) or { []string{} }
             if all_sources.len > 0 {
                 default_tool.sources = all_sources
                 if build_config.verbose {
@@ -1013,31 +1014,6 @@ fn get_object_file(source_file string, object_dir string) string {
     base_name := os.base(rel_no_ext)
     obj_file := os.join_path(object_dir, base_name + '.o')
     return obj_file
-}
-
-fn find_source_files(dir string) ![]string {
-    mut files := []string{}
-    
-    if !os.is_dir(dir) {
-        return error('Source directory does not exist: ${dir}')
-    }
-    
-    items := os.ls(dir) or { return error('Failed to list directory: ${dir}') }
-    
-    for item in items {
-        full_path := os.join_path(dir, item)
-        if os.is_file(full_path) {
-            if item.ends_with('.cpp') || item.ends_with('.cc') || item.ends_with('.cxx') {
-                files << full_path
-            }
-        } else if os.is_dir(full_path) {
-            // Recursively search subdirectories
-            sub_files := find_source_files(full_path)!
-            files << sub_files
-        }
-    }
-    
-    return files
 }
 
 fn needs_recompile(source_file string, object_file string) bool {
