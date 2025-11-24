@@ -4,7 +4,7 @@ import os
 
 // BuildDirective represents a single build directive found in source files
 pub struct BuildDirective {
-__global:
+pub mut:
     unit_name     string // e.g., "tools/arraydump" or "lib/file"
     depends_units []string // e.g., ["lib/file", "lib/cli"]
     link_libs     []string // e.g., ["file.so", "cli.so"]
@@ -19,7 +19,7 @@ pub type TargetConfig = SharedLibConfig | ToolConfig
 
 // SharedLibConfig holds the configuration for a shared library
 pub struct SharedLibConfig {
-__global:
+pub mut:
     name       string // name of the shared library (e.g., "net")
     output_dir string = 'bin/lib' // where to put .so/.dll files
     sources    []string // source files for this library
@@ -34,7 +34,7 @@ __global:
 
 // ToolConfig holds the configuration for a tool/executable
 pub struct ToolConfig {
-__global:
+pub mut:
     name       string // name of the tool/executable
     output_dir string = 'bin/tools' // where to put executable
     sources    []string // source files for this tool
@@ -49,7 +49,7 @@ __global:
 
 // Dependency represents an external dependency to download/extract
 pub struct Dependency {
-__global:
+pub mut:
     name       string
     url        string // download URL
     archive    string // relative archive path to save (under dependencies/tmp)
@@ -60,7 +60,7 @@ __global:
 
 // BuildConfig holds the configuration for the project
 pub struct BuildConfig {
-__global:
+pub mut:
     project_name string
     src_dir      string
     build_dir    string
