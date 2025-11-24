@@ -2,7 +2,6 @@ module deps
 
 import os
 import config
-import os.cmdline
 
 pub fn extract_dependencies(source_file string) ![]string {
     mut dependencies := []string{}

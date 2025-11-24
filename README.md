@@ -1,92 +1,29 @@
 # Lana - V C++ Build System
 
-A simple, fast C++ build tool  designed for modern C++ projects.
+A simple, fast C++ build tool designed for modern C++ projects. Lana compiles itself with V and targets portable C++ workflows without relying on heavyweight generators.
 
-## Features
+## Documentation
 
-- **Automatic dependency tracking** for efficient rebuilds
-- **Simple configuration** with `config.ini` files
-- **Cross-platform** support
-- **Clean, minimal interface**
-
-## Installation
-
-1. Install V: https://vlang.io/
-2. Build Lana:
-   ```bash
-   v . -o lana
-   ```
-3. Add to PATH or use from current directory
+- 📚 **Canonical guide:** [`docs/guide.md`](docs/guide.md) now hosts the full documentation (installation, configuration, directives, troubleshooting).
+- 🧩 **Reusable snippets:** Shared markdown/JSON data lives under [`docs/snippets`](docs/snippets) and [`docs/commands.json`](docs/commands.json). The CLI help output and initializer templates consume these files directly.
 
 ## Quick Start
 
-### Initialize a new project
-```bash
-lana init myproject
-cd myproject
-```
-
-### Build the project
-```bash
-lana build
-```
-
-### Run the project
-```bash
-lana run
-```
-
-### Clean build files
-```bash
-lana clean
-```
+See [`docs/snippets/quickstart.md`](docs/snippets/quickstart.md) for the exact commands surfaced by `lana init`, the README template, and `lana --help`.
 
 ## Project Structure
 
-```
-myproject/
-├── src/          # Source files (.cpp, .cc, .cxx)
-├── include/      # Header files (.h, .hpp)
-├── build/        # Object files and intermediates
-├── bin/          # Executable output
-├── config.ini    # Build configuration
-├── README.md     # Project documentation
-└── .gitignore    # Git ignore file
-```
+[`docs/snippets/project_structure.md`](docs/snippets/project_structure.md) is the single source for structure diagrams used across the README, guide, and generated projects.
 
-## Commands
+## Commands & Options
 
-- `lana build` - Compile the project
-- `lana run` - Build and execute
-- `lana clean` - Remove build files
-- `lana init <name>` - Create new project
-
-## Configuration
-
-Edit `config.ini` to customize your build:
-
-```ini
-# Project settings
-project_name = myproject
-src_dir = src
-build_dir = build
-bin_dir = bin
-debug = true
-optimize = false
-verbose = false
-include_dirs = include
-libraries = 
-cflags = 
-ldflags = 
-```
-
-## License
-
-MIT License - see LICENSE file for details.
+The CLI help text is generated from [`docs/commands.json`](docs/commands.json). Update that file to add or modify commands/options once, and every consumer (help output, initializer docs, website) stays in sync.
 
 ## Contributing
 
-1. Fork the repository
-2. Create a feature branch
-3. Make your changes
-4. Submit a pull request
+- Fork the repository, create a feature branch, hack away, and open a PR.
+- Please keep user-facing documentation changes inside `docs/` whenever possible—other surfaces will pull from there automatically.
+
+## License
+
+MIT License - see [LICENSE](LICENSE) for details.

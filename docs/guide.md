@@ -1,5 +1,7 @@
 # Lana Documentation
 
+> This is the canonical source of project documentation. `README.md`, the CLI help text, and the project initializer templates all reference the content in this directory.
+
 ## Table of Contents
 
 1. [Overview](#overview)
@@ -57,7 +59,7 @@ Lana parses `// build-directive:` comments in your C++ files to handle project-s
    chmod +x lana
    ```
 
-4. Add to PATH (optional):
+4. (Optional) Add to PATH:
    ```bash
    sudo mv lana /usr/local/bin/
    ```
@@ -82,7 +84,7 @@ project/
 │   ├── tools/        # Tool executables
 ├── config.ini        # Global build configuration
 ├── README.md         # Project docs (auto-generated with directive examples)
-└── .gitignore        # Ignores build artifacts
+└── .gitignore        # Git ignore file
 ```
 
 - **Build Directives**: Add `// build-directive:` comments at the top of C++ files for per-file settings (see [Build Directives](#build-directives)).
@@ -111,8 +113,6 @@ lana build [options]
 ```
 Compiles sources, processes directives, builds dependency graph, and links outputs. Incremental: only rebuilds changed files.
 
-**Options:** See [Command Line Options](#command-line-options).
-
 **Example:**
 ```bash
 lana build -d -v  # Debug build with verbose output (shows directive parsing)
@@ -124,21 +124,11 @@ lana run [options]
 ```
 Builds (if needed) and runs the main executable (first tool or `project_name` from config/directives).
 
-**Example:**
-```bash
-lana run -O  # Optimized run
-```
-
 ### Clean Project
 ```bash
 lana clean
 ```
 Removes `build/`, `bin/`, and intermediates.
-
-**Example:**
-```bash
-lana clean
-```
 
 ### Help
 ```bash
@@ -160,21 +150,10 @@ Fetches and extracts external dependencies declared in `config.ini` under `[depe
 - `build_cmds` - optional semicolon-separated shell commands to build/install the dependency
 
 Notes:
-- Only `name` is required. If `url` is omitted Lana will skip any download/clone and extraction steps — this is useful for dependencies that are generated locally or that only require running project-local commands.
-- If `url` points to a git repository (ends with `.git`), `lana setup` will perform a shallow clone into `dependencies/<extract_to>`.
-- For archive URLs `lana setup` will try `curl` then `wget` to download, will verify checksum if provided, and will extract common archive types (`.tar.gz`, `.tar.xz`, `.zip`).
-- When `build_cmds` are present they are executed either inside `dependencies/<extract_to>` (if `extract_to` is set or a clone/extract was performed) or in the project root (if no extract directory is available).
-- The current implementation performs a best-effort download/extract and prints warnings/errors; it is intentionally simple and can be extended or replaced by a more robust script if needed.
-
-Example (only `name` + `build_cmds`):
-
-```ini
-[dependencies]
-name = generate_headers
-build_cmds = tools/gen_headers.sh; cp -r generated/include ../../include/
-```
-
-In this example `lana setup` will not try to download anything — it will run the `build_cmds` from the project root, allowing you to run arbitrary local build or generation steps.
+- Only `name` is required. If `url` is omitted Lana will skip any download/clone and extraction steps — useful for dependencies generated locally or that only require running project-local commands.
+- If `url` points to a git repository (ends with `.git`), `lana setup` performs a shallow clone into `dependencies/<extract_to>`.
+- For archive URLs `lana setup` tries `curl` then `wget` to download, verifies checksum if provided, and extracts common archive types (`.tar.gz`, `.tar.xz`, `.zip`).
+- When `build_cmds` are present they run either inside `dependencies/<extract_to>` (if available) or in the project root.
 
 ## Configuration
 
@@ -190,7 +169,7 @@ src_dir = src
 build_dir = build
 bin_dir = bin
 
-# Build modes (mutually exclusive; CLI overrides)
+# Build modes (CLI overrides)
 debug = true
 optimize = false
 
@@ -235,12 +214,12 @@ Lana's killer feature: Embed build instructions **directly in C++ source files**
 
 ### Supported Directives
 - **`unit-name(<name>)`**: Unique unit ID (e.g., `"lib/cli"`, `"tools/mytool"`). Required for custom builds. Defaults to file path if omitted.
-- **`depends-units(<unit1>,<unit2>,...)`**: Dependencies (other units, e.g., `"lib/utils,lib/file"`). Builds them first.
-- **`link(<lib1>,<lib2>,...)`**: Libraries to link (e.g., `"utils.so,pthread,boost_system"`). Internal (Lana-built) or external.
+- **`depends-units(<unit1>,<unit2>,...)`**: Dependencies (other units). Builds them first.
+- **`link(<lib1>,<lib2>,...)`**: Libraries to link (internal or external).
 - **`out(<path>)`**: Output relative to `bin/` (e.g., `"tools/mytool"`, `"lib/mylib"`). Defaults to unit name.
-- **`cflags(<flag1> <flag2> ...)`**: Per-file compiler flags (e.g., `"-std=c++20 -fPIC"`). Appends to global `cflags`.
-- **`ldflags(<flag1> <flag2> ...)`**: Per-file linker flags (e.g., `"-static -pthread"`). Appends to global `ldflags`.
-- **`shared(<true|false>)`**: Build as shared lib (`.so`/`.dll`, true) or executable (false, default).
+- **`cflags(<flag1> <flag2> ...)`**: Per-file compiler flags. Appends to global `cflags`.
+- **`ldflags(<flag1> <flag2> ...)`**: Per-file linker flags.
+- **`shared(<true|false>)`**: Build as shared lib (`.so`/`.dll`, true) or executable (false).
 
 ### Examples
 
@@ -258,7 +237,6 @@ int main() {
     return 0;
 }
 ```
-- Builds `bin/tools/main` executable. No deps.
 
 **Shared Library (`src/lib/cli.cpp`)**:
 ```cpp
@@ -276,7 +254,6 @@ namespace lana {
     void print_help() { std::cout << "CLI help" << std::endl; }
 }
 ```
-- Builds `bin/lib/cli.so`. PIC for shared lib.
 
 **Tool Depending on Shared Lib (`src/tools/mytool.cpp`)**:
 ```cpp
@@ -296,14 +273,6 @@ int main() {
     return 0;
 }
 ```
-- Depends on/builds `lib/cli` first; links `cli.so`; outputs `bin/tools/mytool`.
-
-### Tips
-- **Order**: Directives before `#include` or code.
-- **Empty Values**: Use `()` for none (e.g., `depends-units()`).
-- **Global Interaction**: Directives add to `config.ini` settings (e.g., global `-Wall` + per-file `-std=c++20`).
-- **Assets**: Use `[dependencies]` hooks for non-C++ steps (e.g., shader compilation).
-- **Legacy**: Use `[shared_libs]`/`[tools]` in config for manual lists (overrides auto-parsing).
 
 ## Build Process
 
@@ -387,12 +356,12 @@ libraries = pthread,boost_system
 cflags = -Wall -Wextra -std=c++17
 ldflags = -static
 
-[shared_libs]  # Legacy/manual (directives preferred)
+[shared_libs]
 name = cli
 sources = src/lib/cli.cpp
 libraries = 
 
-[tools]  # Legacy/manual
+[tools]
 name = main
 sources = src/main.cpp
 libraries = cli
@@ -400,13 +369,11 @@ libraries = cli
 
 ## Troubleshooting
 
-### Common Issues
-
 - **"No source files found"**: Check `src_dir` in config; ensure `.cpp` files exist.
 - **"Failed to parse directive"**: Verify syntax (e.g., `unit-name(lib/cli)`); use `-v` for details.
 - **"Dependency not found"**: Add missing `depends-units()` or build order in directives.
 - **Linking errors**: Check `link()` for libs; install dev packages (e.g., `sudo apt install libpthread-dev`).
-- **Asset build fails**: Verify commands in `[dependencies]` hook scripts (e.g., shader toolchain).
+- **Asset build fails**: Verify commands in `[dependencies]` hook scripts.
 - **Permission denied**: `chmod +x bin/tools/mytool`.
 
 ### Debugging Tips
@@ -422,10 +389,4 @@ See the source code structure in the repo. To extend:
 - Add directives: Update `config.BuildDirective` and `builder.build_from_directives()`.
 - New features: Modify `config.v` for parsing, `builder.v` for logic.
 
-For contributing, see [GitHub](https://github.com/yourusername/lana) (fork, branch, PR).
-
----
-*Documentation for Lana v1.0.0*  
-*Last updated: 2025-09-17*  
-*Issues: [Issues](https://lostcave.ddnss.de/git/jocadbz/lana)*  
-*Contribute: [Repo](https://lostcave.ddnss.de/git/jocadbz/lana)*
+For contributing, see Gitea (fork, branch, PR).

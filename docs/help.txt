@@ -1,0 +1,30 @@
+lana - Vlang C++ Build System
+Usage: lana [command] [options]
+
+Commands:
+  build        Compile all shared libraries and tools according to build directives.
+  run          Build (if needed) and run the main tool (project_name or first tool).
+  clean        Remove build artifacts under build/ and bin/.
+  init <name>  Scaffold a new Lana-ready C++ project.
+  setup        Fetch/build external dependencies declared in config.ini.
+  help         Display this help text.
+
+Global Options:
+  -d, --debug           Enable debug mode (-g -O0).
+  -O, --optimize        Enable optimization (-O3, disables debug).
+  -v, --verbose         Verbose logging (graph + compiler commands).
+  -p, --parallel        Force parallel compilation worker pool.
+  -o, --output <name>   Override project/output name.
+  -I <dir>              Add include directory (repeatable).
+  -L <dir>              Add library search path (repeatable).
+  -l <lib>              Add global link library (repeatable).
+  -c, --compiler <bin>  Set compiler binary explicitly.
+  --toolchain <name>    Choose toolchain adapter (gcc/clang).
+  --config <file>       Use alternate config file.
+  --shared-lib <name> <source>  Add legacy shared lib entry (no directives).
+  --tool <name> <source>        Add legacy tool entry (no directives).
+
+Docs:
+  Canonical Guide     docs/guide.md
+  Project Structure   docs/snippets/project_structure.md
+  Quick Start         docs/snippets/quickstart.md
