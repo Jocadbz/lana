@@ -5,7 +5,9 @@ import config
 
 pub fn extract_dependencies(source_file string) ![]string {
     mut dependencies := []string{}
-    content := os.read_file(source_file) or { return []string{} }
+    content := os.read_file(source_file) or {
+        return error('Failed to read source file ${source_file}: ${err}')
+    }
     
     mut in_string := false
     mut current_string_char := rune(0)
@@ -63,14 +65,19 @@ pub fn extract_dependencies(source_file string) ![]string {
 }
 
 pub fn generate_dependency_file(source_file string, object_file string, dep_file string) {
-    dependencies := extract_dependencies(source_file) or { return }
+    dependencies := extract_dependencies(source_file) or {
+        eprintln('Warning: Failed to extract dependencies from ${source_file}: ${err}')
+        return
+    }
     
     mut content := '${object_file}: ${source_file}\n'
     for dep in dependencies {
         content += '\t${dep}\n'
     }
     
-    os.write_file(dep_file, content) or { }
+    os.write_file(dep_file, content) or {
+        eprintln('Warning: Failed to write dependency file ${dep_file}: ${err}')
+    }
 }
 
 // Fetch and extract dependencies declared in the build config
