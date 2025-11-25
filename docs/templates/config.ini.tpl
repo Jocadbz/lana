@@ -10,6 +10,7 @@ debug = true
 optimize = false
 verbose = false
 parallel_compilation = true
+static_link = false
 include_dirs = include
 lib_search_paths =
 cflags = -Wall -Wextra
@@ -22,3 +23,4 @@ dependencies_dir = dependencies
 
 [tools]
 # legacy/manual entries go here when you don't want build directives
+# Per-tool static_link can override global: static_link = true

@@ -14,6 +14,7 @@ Global Options:
   -O, --optimize        Enable optimization (-O3, disables debug).
   -v, --verbose         Verbose logging (graph + compiler commands).
   -p, --parallel        Force parallel compilation worker pool.
+  -s, --static          Link tools statically (self-contained binaries).
   -o, --output <name>   Override project/output name.
   -I <dir>              Add include directory (repeatable).
   -L <dir>              Add library search path (repeatable).

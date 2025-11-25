@@ -13,6 +13,7 @@ pub mut:
     cflags        []string // file-specific CFLAGS
     ldflags       []string // file-specific LDFLAGS
     is_shared     bool     // whether this is a shared library
+    static_link   ?bool    // override global static_link setting (none = use global)
 }
 
 // TargetConfig is a sum type for build targets (shared lib or tool)
@@ -46,6 +47,7 @@ pub mut:
     debug      bool
     optimize   bool
     verbose    bool
+    static_link bool // link statically to produce self-contained binary
 }
 
 // Dependency represents an external dependency to download/extract
@@ -83,6 +85,7 @@ pub mut:
     dependencies_dir string = 'dependencies' // external dependencies
     parallel_compilation bool = true // enable parallel builds
     dependencies []Dependency
+    static_link  bool // global static linking flag for tools
     
     // Build directives from source files
     build_directives []BuildDirective
@@ -100,6 +103,7 @@ mut:
     optimize_str string
     verbose_str string
     parallel_str string
+    static_link_str string
     include_dirs []string
     lib_search_paths []string
     libraries []string
@@ -134,6 +138,7 @@ mut:
     debug_str string
     optimize_str string
     verbose_str string
+    static_link_str string
 }
 
 struct RawDependencyConfig {
@@ -259,6 +264,7 @@ fn normalize_raw_config(raw RawBuildConfig, mut warnings []string) BuildConfig {
     cfg.optimize = resolve_bool(cfg.optimize, raw.global.optimize_str, 'global', 'optimize', mut warnings)
     cfg.verbose = resolve_bool(cfg.verbose, raw.global.verbose_str, 'global', 'verbose', mut warnings)
     cfg.parallel_compilation = resolve_bool(cfg.parallel_compilation, raw.global.parallel_str, 'global', 'parallel_compilation', mut warnings)
+    cfg.static_link = resolve_bool(cfg.static_link, raw.global.static_link_str, 'global', 'static_link', mut warnings)
 
     cfg.include_dirs = inherit_list(raw.global.include_dirs, cfg.include_dirs)
     cfg.lib_search_paths = inherit_list(raw.global.lib_search_paths, cfg.lib_search_paths)
@@ -294,6 +300,7 @@ fn normalize_raw_config(raw RawBuildConfig, mut warnings []string) BuildConfig {
             debug: resolve_bool(cfg.debug, raw_tool.debug_str, scope, 'debug', mut warnings)
             optimize: resolve_bool(cfg.optimize, raw_tool.optimize_str, scope, 'optimize', mut warnings)
             verbose: resolve_bool(cfg.verbose, raw_tool.verbose_str, scope, 'verbose', mut warnings)
+            static_link: resolve_bool(cfg.static_link, raw_tool.static_link_str, scope, 'static_link', mut warnings)
         }
         tool.include_dirs = inherit_list(raw_tool.include_dirs, cfg.include_dirs)
         tool.cflags = inherit_list(raw_tool.cflags, cfg.cflags)
@@ -370,6 +377,8 @@ pub fn (mut build_config BuildConfig) parse_build_directives() ! {
         mut file_cflags := []string{}
         mut file_ldflags := []string{}
         mut is_shared := false
+        mut static_override := false
+        mut has_static_override := false
         
         for line1 in lines {
             line := line1.trim_space()
@@ -420,6 +429,10 @@ pub fn (mut build_config BuildConfig) parse_build_directives() ! {
                 'shared' {
                     is_shared = directive_value == 'true'
                 }
+                'static' {
+                    static_override = directive_value == 'true'
+                    has_static_override = true
+                }
                 else {
                     if build_config.verbose {
                         println('Warning: Unknown build directive: ${directive_type} in ${src_file}')
@@ -437,6 +450,7 @@ pub fn (mut build_config BuildConfig) parse_build_directives() ! {
                 cflags: file_cflags
                 ldflags: file_ldflags
                 is_shared: is_shared
+                static_link: if has_static_override { ?bool(static_override) } else { none }
             }
             
             if build_config.verbose {
@@ -464,6 +478,7 @@ pub fn parse_args() !BuildConfig {
             '-O', '--optimize' { build_config.optimize = true; build_config.debug = false }
             '-v', '--verbose' { build_config.verbose = true }
             '-p', '--parallel' { build_config.parallel_compilation = true }
+            '-s', '--static' { build_config.static_link = true }
             '-o', '--output' { 
                 if i + 1 < os.args.len { 
                     build_config.project_name = os.args[i + 1]
@@ -533,6 +548,7 @@ pub fn parse_args() !BuildConfig {
                         debug: build_config.debug
                         optimize: build_config.optimize
                         verbose: build_config.verbose
+                        static_link: build_config.static_link
                     }
                     build_config.tools << tool_config
                     i += 2
@@ -551,6 +567,7 @@ pub fn parse_args() !BuildConfig {
                             debug: build_config.debug
                             optimize: build_config.optimize
                             verbose: build_config.verbose
+                            static_link: build_config.static_link
                         }
                         build_config.tools << default_tool
                     }
@@ -571,6 +588,7 @@ pub fn parse_args() !BuildConfig {
             debug: build_config.debug
             optimize: build_config.optimize
             verbose: build_config.verbose
+            static_link: build_config.static_link
         }
         build_config.tools << default_tool
     }
@@ -657,6 +675,7 @@ pub fn parse_config_file(filename string) !BuildConfig {
                     'cflags' { raw.global.cflags << parse_space_list(value) }
                     'ldflags' { raw.global.ldflags << parse_space_list(value) }
                     'dependencies_dir' { raw.global.dependencies_dir = value }
+                    'static_link' { raw.global.static_link_str = value }
                     else { warnings << 'Unknown global config key: ${key}' }
                 }
             }
@@ -697,6 +716,7 @@ pub fn parse_config_file(filename string) !BuildConfig {
                     'optimize' { tool.optimize_str = value }
                     'verbose' { tool.verbose_str = value }
                     'output_dir' { tool.output_dir = value }
+                    'static_link' { tool.static_link_str = value }
                     else { warnings << 'Unknown tools key: ${key}' }
                 }
             }
@@ -935,6 +955,11 @@ fn common_tool_link_command(compiler string, object_files []string, executable s
     }
     mut cmd := '${binary}'
 
+    // Add static linking flags if enabled
+    if tool_config.static_link {
+        cmd += ' -static'
+    }
+
     cmd += ' -L${build_config.bin_dir}/lib'
     for lib_path in build_config.lib_search_paths {
         cmd += ' -L${lib_path}'
@@ -954,7 +979,19 @@ fn common_tool_link_command(compiler string, object_files []string, executable s
         }
     }
 
-    for library in tool_config.libraries {
+    // For static linking, reverse library order so dependencies come after dependents
+    // (static linker resolves symbols left-to-right, so A depending on B needs: -lA -lB)
+    libs := if tool_config.static_link {
+        mut reversed := []string{}
+        for i := tool_config.libraries.len - 1; i >= 0; i-- {
+            reversed << tool_config.libraries[i]
+        }
+        reversed
+    } else {
+        tool_config.libraries
+    }
+
+    for library in libs {
         if library != '' {
             mut libfile := library
             if libfile.starts_with('lib/') {
@@ -964,7 +1001,12 @@ fn common_tool_link_command(compiler string, object_files []string, executable s
             if libfile.ends_with('.so') {
                 libfile = libfile.replace('.so', '')
             }
-            cmd += ' -l:${libfile}.so'
+            // Use static library (.a) when static linking, otherwise shared (.so)
+            if tool_config.static_link {
+                cmd += ' -l:${libfile}.a'
+            } else {
+                cmd += ' -l:${libfile}.so'
+            }
         }
     }
 
@@ -973,6 +1015,11 @@ fn common_tool_link_command(compiler string, object_files []string, executable s
     }
     for flag in tool_config.ldflags {
         cmd += ' ${flag}'
+    }
+
+    // Add static runtime flags for fully static binary
+    if tool_config.static_link {
+        cmd += ' -static-libgcc -static-libstdc++'
     }
 
     cmd += ' -o ${executable}'

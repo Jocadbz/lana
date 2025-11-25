@@ -592,6 +592,9 @@ fn build_directive_tool(directive config.BuildDirective, build_config config.Bui
         println('Linking executable: ${executable}')
     }
 
+    // Directive static(true/false) overrides global config, otherwise inherit global setting
+    use_static := directive.static_link or { build_config.static_link }
+
     link_tool([ctx.object], executable, build_config, toolchain, config.ToolConfig{
         name: directive.unit_name
         libraries: directive.link_libs
@@ -599,6 +602,7 @@ fn build_directive_tool(directive config.BuildDirective, build_config config.Bui
         optimize: build_config.optimize
         verbose: build_config.verbose
         ldflags: directive.ldflags
+        static_link: use_static
     }) or {
         return error('Failed to link executable ${directive.unit_name}')
     }
@@ -716,9 +720,25 @@ fn auto_discover_sources(mut build_config config.BuildConfig) {
         }
     }
 
+    // Also check if the main project exists as a build directive
+    if !main_tool_exists {
+        for directive in build_config.build_directives {
+            // Check if directive unit_name matches project_name or ends with project_name
+            if directive.unit_name == build_config.project_name {
+                main_tool_exists = true
+                break
+            }
+            // Also match "fossvg" to directive "fossvg" or "tools/fossvg"
+            parts := directive.unit_name.split('/')
+            if parts.len > 0 && parts[parts.len - 1] == build_config.project_name {
+                main_tool_exists = true
+                break
+            }
+        }
+    }
+
     if !main_tool_exists {
         // Look for src/<project_name>.cpp
-        // Really shit way to do it but meh, we'll figure this out soon enough.
         main_src := os.join_path(build_config.src_dir, '${build_config.project_name}.cpp')
         if os.is_file(main_src) {
             if build_config.verbose {
@@ -977,6 +997,49 @@ fn link_shared_library(object_files []string, library_name string, output_path s
         // print raw output (may contain stdout and stderr merged by os.execute)
         println(colorize('Linker output:\n${res.output}', ansi_red))
         return error('Shared library linking failed with exit code ${res.exit_code}: ${res.output}')
+    }
+
+    // Check if static archive is needed: either global static_link or any tool has static_link
+    needs_static_archive := build_config.static_link || any_tool_needs_static_link(build_config)
+    if needs_static_archive {
+        create_static_archive(object_files, library_name, output_path, build_config, lib_config)!
+    }
+}
+
+// any_tool_needs_static_link returns true if any tool in the config has static_link enabled
+pub fn any_tool_needs_static_link(build_config config.BuildConfig) bool {
+    for tool in build_config.tools {
+        if tool.static_link {
+            return true
+        }
+    }
+    return false
+}
+
+// create_static_archive creates a static library (.a) from object files using ar
+fn create_static_archive(object_files []string, library_name string, output_path string, build_config config.BuildConfig, lib_config config.SharedLibConfig) ! {
+    // Extract base name from library_name (e.g., "lib/cli" -> "cli")
+    parts := library_name.split('/')
+    base_name := if parts.len > 0 { parts[parts.len - 1] } else { library_name }
+    
+    archive_path := os.join_path(output_path, '${base_name}.a')
+    
+    // Build ar command: ar rcs <archive> <objects...>
+    mut cmd := 'ar rcs ${archive_path}'
+    for obj_file in object_files {
+        cmd += ' ${obj_file}'
+    }
+    
+    if lib_config.verbose || build_config.verbose {
+        println('Creating static archive: ${archive_path}')
+        println('Archive command: ${cmd}')
+    }
+    
+    ar_res := os.execute(cmd)
+    if ar_res.exit_code != 0 {
+        println(colorize('Archive command: ${cmd}', ansi_cyan))
+        println(colorize('Archive output:\n${ar_res.output}', ansi_red))
+        return error('Static archive creation failed with exit code ${ar_res.exit_code}: ${ar_res.output}')
     }
 }
 
