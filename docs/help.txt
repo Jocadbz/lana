@@ -7,7 +7,17 @@ Commands:
   clean        Remove build artifacts under build/ and bin/.
   init <name>  Scaffold a new Lana-ready C++ project.
   setup        Fetch/build external dependencies declared in config.ini.
+  devenv       Generate shell script to activate temporary development environment.
   help         Display this help text.
+
+Devenv Options:
+  --shell, -s <shell>   Specify shell type (bash, zsh, fish, sh).
+  --info, -i            Show environment info without generating script.
+
+  Usage examples:
+    bash/zsh:   source <(lana devenv)
+    fish:       source (lana devenv | psub)
+    sh:         eval "$(lana devenv)"
 
 Global Options:
   -d, --debug           Enable debug mode (-g -O0).

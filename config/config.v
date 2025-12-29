@@ -89,6 +89,9 @@ pub mut:
     
     // Build directives from source files
     build_directives []BuildDirective
+    
+    // Devenv configuration for temporary development environment
+    devenv_lib_paths []string // optional separate lib paths for devenv (falls back to lib_search_paths)
 }
 
 struct RawGlobalConfig {
@@ -110,6 +113,7 @@ mut:
     cflags []string
     ldflags []string
     dependencies_dir string
+    devenv_lib_paths []string
 }
 
 struct RawSharedLibConfig {
@@ -271,6 +275,7 @@ fn normalize_raw_config(raw RawBuildConfig, mut warnings []string) BuildConfig {
     cfg.libraries = inherit_list(raw.global.libraries, cfg.libraries)
     cfg.cflags = inherit_list(raw.global.cflags, cfg.cflags)
     cfg.ldflags = inherit_list(raw.global.ldflags, cfg.ldflags)
+    cfg.devenv_lib_paths = inherit_list(raw.global.devenv_lib_paths, cfg.devenv_lib_paths)
 
     for raw_lib in raw.shared_libs {
         scope := scope_label(raw_lib.name, 'shared_lib')
@@ -671,6 +676,7 @@ pub fn parse_config_file(filename string) !BuildConfig {
                     'parallel_compilation' { raw.global.parallel_str = value }
                     'include_dirs' { raw.global.include_dirs << parse_comma_list(value) }
                     'lib_search_paths' { raw.global.lib_search_paths << parse_comma_list(value) }
+                    'devenv_lib_paths' { raw.global.devenv_lib_paths << parse_comma_list(value) }
                     'libraries' { raw.global.libraries << parse_comma_list(value) }
                     'cflags' { raw.global.cflags << parse_space_list(value) }
                     'ldflags' { raw.global.ldflags << parse_space_list(value) }

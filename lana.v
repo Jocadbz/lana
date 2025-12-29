@@ -8,6 +8,7 @@ import initializer
 import deps
 import help
 import util
+import devenv
 
 fn main() {
 	mut config_data := config.parse_args() or { config.default_config }
@@ -53,6 +54,38 @@ fn main() {
 			deps.fetch_dependencies(config_data) or {
 				eprintln('Failed to fetch dependencies: ${err}')
 				exit(1)
+			}
+		}
+		'devenv' {
+			// Parse devenv-specific options
+			mut shell_override := ''
+			mut show_info := false
+			
+			mut i := 2
+			for i < os.args.len {
+				arg := os.args[i]
+				match arg {
+					'--shell', '-s' {
+						if i + 1 < os.args.len {
+							shell_override = os.args[i + 1]
+							i += 1
+						}
+					}
+					'--info', '-i' {
+						show_info = true
+					}
+					else {}
+				}
+				i += 1
+			}
+			
+			if show_info {
+				devenv.print_devenv_info(config_data)
+			} else {
+				devenv.activate_devenv(config_data, shell_override) or {
+					eprintln('Failed to generate devenv script: ${err}')
+					exit(1)
+				}
 			}
 		}
 		else {
